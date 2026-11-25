@@ -176,12 +176,28 @@ def _evaluate_script_with_critic(
     )
 
 
-def _normalize_script(raw_script: Dict[str, Any], combo: MatrixCombo, video_index: int) -> Dict[str, Any]:
+def _normalize_script(raw_script: Any, combo: MatrixCombo, video_index: int) -> Dict[str, Any]:
     """Chuẩn hóa cấu trúc kịch bản, đảm bảo đủ trường dữ liệu và phong cách 2D đồng nhất."""
+    if isinstance(raw_script, list):
+        if len(raw_script) == 1 and isinstance(raw_script[0], dict):
+            raw_script = raw_script[0]
+        elif len(raw_script) > 0 and isinstance(raw_script[0], dict) and (
+            "narration" in raw_script[0] or "scene_id" in raw_script[0]
+        ):
+            raw_script = {"scenes": raw_script}
+        else:
+            raw_script = {}
+    if not isinstance(raw_script, dict):
+        raw_script = {}
+
     scenes_clean: List[Dict[str, Any]] = []
     raw_scenes = raw_script.get("scenes", [])
+    if not isinstance(raw_scenes, list):
+        raw_scenes = []
 
     for idx, scene in enumerate(raw_scenes):
+        if not isinstance(scene, dict):
+            continue
         motion = scene.get("motion_type", ALLOWED_MOTIONS[idx % len(ALLOWED_MOTIONS)])
         if motion not in ALLOWED_MOTIONS:
             motion = ALLOWED_MOTIONS[idx % len(ALLOWED_MOTIONS)]
@@ -304,6 +320,9 @@ def plan_daily_scripts() -> Path:
         best_candidate: Optional[Dict[str, Any]] = None
         best_embedding: List[float] = []
         best_score = -1.0
+        fallback_candidate: Optional[Dict[str, Any]] = None
+        fallback_embedding: List[float] = []
+        fallback_sim = 2.0
 
         for attempt in range(config.SCRIPT_MAX_RETRIES + 1):
             history_digest = dedup.build_history_exclusion_digest()
@@ -330,6 +349,14 @@ def plan_daily_scripts() -> Path:
 
             # Tầng 3: Kiểm tra trùng lặp ngữ nghĩa với 90 ngày lịch sử + các video đã duyệt hôm nay
             is_dup, max_sim, matched_title, embedding = dedup.check_semantic_duplicate(candidate)
+
+            # Luôn giữ lại bản ít giống nhất làm phương án dự phòng để không làm sập toàn bộ 5 video
+            if max_sim < fallback_sim:
+                fallback_sim = max_sim
+                fallback_candidate = candidate
+                fallback_embedding = embedding
+                fallback_candidate["max_history_similarity"] = round(max_sim, 4)
+
             if is_dup:
                 revision_feedback = (
                     f"Ý tưởng bị trùng lặp ngữ nghĩa (độ tương đồng {max_sim:.2%}) với video cũ "
@@ -371,6 +398,16 @@ def plan_daily_scripts() -> Path:
                 f"Nhận xét cần sửa: {review.get('critique_feedback', 'Tăng chiều sâu và độ sắc của Hook 15s đầu.')}"
             )
             logger.warning("[REWRITE V%d] Chưa đạt ngưỡng 8.0, viết lại lần %d...", video_index, attempt + 1)
+
+        if best_candidate is None and fallback_candidate is not None:
+            logger.warning(
+                "[FALLBACK APPROVE V%d] Dùng phương án ít trùng nhất (sim=%.3f) để tiếp tục xuất xưởng: '%s'",
+                video_index,
+                fallback_sim,
+                fallback_candidate.get("title", ""),
+            )
+            best_candidate = fallback_candidate
+            best_embedding = fallback_embedding
 
         if best_candidate is None:
             raise RuntimeError(f"Không thể tạo kịch bản hợp lệ cho VIDEO #{video_index + 1} sau 3 lần thử.")

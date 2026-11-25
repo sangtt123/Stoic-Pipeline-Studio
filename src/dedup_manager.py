@@ -200,9 +200,19 @@ class DedupManager:
     # ------------------------------------------------------------------
     # TẦNG 3: Kiểm tra độ tương đồng ngữ nghĩa (Semantic Similarity Check)
     # ------------------------------------------------------------------
-    def _build_semantic_text(self, title: str, summary: str, core_quote: str, angle: str) -> str:
+    def _build_semantic_text(
+        self,
+        title: str,
+        summary: str,
+        core_quote: str,
+        angle: str,
+        philosopher: str = "",
+        modern_context: str = "",
+    ) -> str:
         return (
             f"Title: {title}\n"
+            f"Philosopher: {philosopher}\n"
+            f"Modern Context: {modern_context}\n"
             f"Angle: {angle}\n"
             f"Core Quote: {core_quote}\n"
             f"Summary: {summary}"
@@ -213,15 +223,18 @@ class DedupManager:
     ) -> Tuple[bool, float, Optional[str], List[float]]:
         """
         Kiểm tra kịch bản ứng viên với toàn bộ lịch sử 90 ngày + các kịch bản đã duyệt trong ngày.
-
-        Trả về:
-            (is_duplicate, max_similarity_score, matched_title, candidate_embedding)
+        Lưu ý hiệu chuẩn đa ngôn ngữ (đặc biệt tiếng Việt cùng ngách Stoicism):
+        - Các video cùng ngách tiếng Việt thường có cosine nền ~0.76–0.84 trên text-embedding-004.
+        - Chỉ loại cứng khi > config.SEMANTIC_SIMILARITY_THRESHOLD (mặc định 0.90).
+        - Vùng giáp ranh 0.78–0.90 giao cho LLM kiểm tra chéo ý tưởng thực sự có trùng hay không.
         """
         semantic_text = self._build_semantic_text(
             title=candidate.get("title", ""),
             summary=candidate.get("summary", ""),
             core_quote=candidate.get("core_quote", ""),
             angle=candidate.get("angle", ""),
+            philosopher=candidate.get("philosopher", ""),
+            modern_context=candidate.get("modern_context", ""),
         )
         candidate_embedding = self.vertex.embed_text(
             semantic_text, task_name="dedup_candidate_embedding"
@@ -236,12 +249,13 @@ class DedupManager:
         for entry in self.entries:
             entry_emb = entry.get("embedding")
             if not entry_emb:
-                # Tự động bổ sung embedding nếu bản ghi lịch sử chưa lưu sẵn vector
                 entry_text = self._build_semantic_text(
                     title=entry.get("title", ""),
                     summary=entry.get("summary", ""),
                     core_quote=entry.get("core_quote", ""),
                     angle=entry.get("angle", ""),
+                    philosopher=entry.get("philosopher", ""),
+                    modern_context=entry.get("modern_context", ""),
                 )
                 entry_emb = self.vertex.embed_text(entry_text, task_name="dedup_history_backfill")
                 entry["embedding"] = entry_emb
@@ -252,19 +266,20 @@ class DedupManager:
                 closest_entry = entry
 
         matched_title = closest_entry.get("title") if closest_entry else None
+        hard_threshold = max(0.88, float(config.SEMANTIC_SIMILARITY_THRESHOLD))
 
-        # Ngưỡng cứng > 0.75 => Chắc chắn trùng lặp ngữ nghĩa
-        if max_sim > config.SEMANTIC_SIMILARITY_THRESHOLD:
+        # Ngưỡng cứng > 0.90 => Chắc chắn trùng lặp ngữ nghĩa gần như nguyên bản
+        if max_sim > hard_threshold:
             logger.warning(
                 "[DEDUP T3 REJECT] Độ tương đồng=%.3f (> %.2f) với video cũ '%s'.",
                 max_sim,
-                config.SEMANTIC_SIMILARITY_THRESHOLD,
+                hard_threshold,
                 matched_title,
             )
             return True, max_sim, matched_title, candidate_embedding
 
-        # Vùng giáp ranh (0.65 - 0.75): Dùng LLM kiểm tra chéo ý tưởng cốt lõi
-        if max_sim >= 0.65 and closest_entry is not None:
+        # Vùng giáp ranh (0.78 - 0.90): Dùng LLM kiểm tra chéo sâu xem có trùng ý tưởng thật không
+        if max_sim >= 0.78 and closest_entry is not None:
             cross_check = self._llm_overlap_crosscheck(candidate, closest_entry)
             if cross_check.get("is_duplicate", False):
                 logger.warning(
@@ -274,11 +289,17 @@ class DedupManager:
                     cross_check.get("reason", ""),
                 )
                 return True, max_sim, matched_title, candidate_embedding
+            logger.info(
+                "[DEDUP T3 LLM PASS] Sim=%.3f nhưng AI xác nhận khác chủ đề với '%s': %s",
+                max_sim,
+                matched_title,
+                cross_check.get("reason", ""),
+            )
 
         logger.info(
-            "[DEDUP T3 PASS] Độ tương đồng cao nhất=%.3f (ngưỡng %.2f) — Đạt chuẩn mới lạ.",
+            "[DEDUP T3 PASS] Độ tương đồng cao nhất=%.3f (ngưỡng cứng %.2f) — Đạt chuẩn mới lạ.",
             max_sim,
-            config.SEMANTIC_SIMILARITY_THRESHOLD,
+            hard_threshold,
         )
         return False, max_sim, matched_title, candidate_embedding
 
