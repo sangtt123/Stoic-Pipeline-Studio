@@ -42,7 +42,7 @@ jobs:
   job1_plan_scripts:
     name: Stage 1 — Script Planner & 3-Tier Dedup
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     env:
       GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
       GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
@@ -94,7 +94,7 @@ jobs:
     name: Stage 2 — Produce Video #${{ matrix.video_index }}
     needs: job1_plan_scripts
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     env:
       GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
       GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}

@@ -80,12 +80,10 @@ VERTEX_EMBEDDING_LOCATION: str = os.getenv("VERTEX_EMBEDDING_LOCATION", "us-cent
 # ==============================================================================
 
 LLM_FALLBACK_MODELS: List[str] = [
-    "gemini-3.1-pro-preview",
-    "gemini-3.8-flash",
-    "gemini-3.5-flash",
-    "gemini-3.1-flash-lite",
-    "gemini-2.5-pro",
     "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-3.1-pro-preview",
+    "gemini-3.1-flash-lite",
 ]
 
 IMAGEN_FALLBACK_MODELS: List[str] = [
@@ -131,7 +129,7 @@ BACKOFF_JITTER_MAX_SECONDS: float = 3.5
 
 HISTORY_FILENAME: str = "history_log.json"
 HISTORY_RETENTION_DAYS: int = 90
-SEMANTIC_SIMILARITY_THRESHOLD: float = 0.75  # > 75% => Hủy & yêu cầu AI viết lại
+SEMANTIC_SIMILARITY_THRESHOLD: float = 0.90  # > 90% => Chắc chắn trùng; vùng 78%–90% để AI đối chiếu ngữ nghĩa
 
 # Tầng 2: Ma trận kết hợp ngẫu nhiên có kiểm soát (Angle & Persona Matrix)
 PHILOSOPHERS_AND_SCHOOLS: List[str] = [

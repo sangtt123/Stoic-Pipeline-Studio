@@ -170,7 +170,14 @@ def load_gcp_service_account(force_reload: bool = False) -> GCPServiceAccountCon
             "`GOOGLE_APPLICATION_CREDENTIALS` / `GCP_SA_KEY`."
         )
 
-    project_id = config.GCP_PROJECT_ID or str(sa_info.get("project_id", "")).strip()
+    sa_project_id = str(sa_info.get("project_id", "")).strip()
+    env_project_id = str(config.GCP_PROJECT_ID or "").strip()
+    if sa_project_id and env_project_id and env_project_id != sa_project_id:
+        logger.warning(
+            "[GCP AUTH] GCP_PROJECT_ID từ môi trường khác với project_id bên trong Service Account JSON -> ưu tiên dùng project_id từ JSON ('%s').",
+            sa_project_id,
+        )
+    project_id = sa_project_id or env_project_id
     if not project_id:
         raise ValueError(
             f"File Service Account JSON ({source_label}) không chứa trường 'project_id' "

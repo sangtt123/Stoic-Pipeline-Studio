@@ -35,16 +35,14 @@ export const DEFAULT_PIPELINE_CONFIG: PipelineConfig = {
     'Clean flat minimalist stickman explainer illustration on cool ice-gray #EEF2F7 studio background (NOT generic beige/cream), crisp bold deep navy-black #0F172A ink stickman narrator wearing a simple tie with clear facial expressions, simple line icons, vivid cobalt blue #2563EB arrows and highlight marks, uncluttered high-contrast diagram easy to understand in 1 second, no dark muddy shadows, no watermark',
   dailyVideoCount: 5,
   cronTimezone: 'ICT_0200',
-  similarityThreshold: 0.75,
+  similarityThreshold: 0.9,
   criticMinScore: 8.0,
   historyRetentionDays: 90,
   llmFallbackModels: [
-    'gemini-3.1-pro-preview',
-    'gemini-3.8-flash',
-    'gemini-3.5-flash',
-    'gemini-3.1-flash-lite',
-    'gemini-2.5-pro',
     'gemini-2.5-flash',
+    'gemini-2.5-pro',
+    'gemini-3.1-pro-preview',
+    'gemini-3.1-flash-lite',
   ],
   imagenFallbackModels: [
     'imagen-4.0-fast-generate-001',
@@ -424,7 +422,7 @@ jobs:
   job1_plan_scripts:
     name: Stage 1 — Script Planner & 3-Tier Dedup
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     env:
       GCP_PROJECT_ID: \${{ secrets.GCP_PROJECT_ID }}
       GDRIVE_FOLDER_ID: \${{ secrets.GDRIVE_FOLDER_ID }}
@@ -476,7 +474,7 @@ jobs:
     name: Stage 2 — Produce Video #\${{ matrix.video_index }}
     needs: job1_plan_scripts
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     env:
       GCP_PROJECT_ID: \${{ secrets.GCP_PROJECT_ID }}
       GDRIVE_FOLDER_ID: \${{ secrets.GDRIVE_FOLDER_ID }}

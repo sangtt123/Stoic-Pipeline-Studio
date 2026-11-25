@@ -304,6 +304,9 @@ def plan_daily_scripts() -> Path:
         best_candidate: Optional[Dict[str, Any]] = None
         best_embedding: List[float] = []
         best_score = -1.0
+        fallback_candidate: Optional[Dict[str, Any]] = None
+        fallback_embedding: List[float] = []
+        fallback_sim = 2.0
 
         for attempt in range(config.SCRIPT_MAX_RETRIES + 1):
             history_digest = dedup.build_history_exclusion_digest()
@@ -330,6 +333,14 @@ def plan_daily_scripts() -> Path:
 
             # Tầng 3: Kiểm tra trùng lặp ngữ nghĩa với 90 ngày lịch sử + các video đã duyệt hôm nay
             is_dup, max_sim, matched_title, embedding = dedup.check_semantic_duplicate(candidate)
+
+            # Luôn giữ lại bản ít giống nhất làm phương án dự phòng để không làm sập toàn bộ 5 video
+            if max_sim < fallback_sim:
+                fallback_sim = max_sim
+                fallback_candidate = candidate
+                fallback_embedding = embedding
+                fallback_candidate["max_history_similarity"] = round(max_sim, 4)
+
             if is_dup:
                 revision_feedback = (
                     f"Ý tưởng bị trùng lặp ngữ nghĩa (độ tương đồng {max_sim:.2%}) với video cũ "
@@ -371,6 +382,16 @@ def plan_daily_scripts() -> Path:
                 f"Nhận xét cần sửa: {review.get('critique_feedback', 'Tăng chiều sâu và độ sắc của Hook 15s đầu.')}"
             )
             logger.warning("[REWRITE V%d] Chưa đạt ngưỡng 8.0, viết lại lần %d...", video_index, attempt + 1)
+
+        if best_candidate is None and fallback_candidate is not None:
+            logger.warning(
+                "[FALLBACK APPROVE V%d] Dùng phương án ít trùng nhất (sim=%.3f) để tiếp tục xuất xưởng: '%s'",
+                video_index,
+                fallback_sim,
+                fallback_candidate.get("title", ""),
+            )
+            best_candidate = fallback_candidate
+            best_embedding = fallback_embedding
 
         if best_candidate is None:
             raise RuntimeError(f"Không thể tạo kịch bản hợp lệ cho VIDEO #{video_index + 1} sau 3 lần thử.")
