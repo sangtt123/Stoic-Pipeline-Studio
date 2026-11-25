@@ -52,8 +52,15 @@ _cached_context: Optional[GCPServiceAccountContext] = None
 
 
 def _parse_sa_text_robust(raw_text: str, source_label: str) -> Dict[str, Any]:
-    """Parse Service Account JSON an toàn (hỗ trợ JSON thô, Base64 và chuẩn hóa newline của private_key)."""
-    candidate = raw_text.strip()
+    """Parse Service Account JSON an toàn (hỗ trợ JSON thô, Base64, BOM và chuẩn hóa newline của private_key)."""
+    candidate = raw_text.lstrip("\ufeff").strip()
+    if not candidate:
+        raise ValueError(
+            f"Nguồn '{source_label}' đang RỖNG (0 ký tự). "
+            "Hãy kiểm tra trên GitHub: Settings -> Secrets and variables -> Actions -> Repository secrets "
+            "đã tạo đúng tên secret 'GCP_SA_KEY' và dán toàn bộ nội dung file JSON Service Account chưa."
+        )
+
     if (candidate.startswith("'") and candidate.endswith("'")) or (
         candidate.startswith('"') and candidate.endswith('"') and '\\"type\\"' in candidate
     ):
@@ -61,7 +68,12 @@ def _parse_sa_text_robust(raw_text: str, source_label: str) -> Dict[str, Any]:
 
     if not candidate.startswith("{") and len(candidate) > 80:
         try:
-            decoded = base64.b64decode(re.sub(r"\s+", "", candidate)).decode("utf-8").strip()
+            decoded = (
+                base64.b64decode(re.sub(r"\s+", "", candidate))
+                .decode("utf-8")
+                .lstrip("\ufeff")
+                .strip()
+            )
             if decoded.startswith("{"):
                 candidate = decoded
         except Exception:
@@ -82,7 +94,12 @@ def _parse_sa_text_robust(raw_text: str, source_label: str) -> Dict[str, Any]:
             continue
 
     if parsed is None:
-        raise ValueError(f"Không thể đọc nội dung Service Account JSON từ '{source_label}'.")
+        raise ValueError(
+            f"Không thể đọc nội dung Service Account JSON từ '{source_label}' "
+            f"(độ dài={len(candidate)} ký tự, ký tự đầu='{candidate[:1]}', ký tự cuối='{candidate[-1:]}'). "
+            "Hãy mở file .json bằng Notepad/VS Code, copy toàn bộ từ dấu '{' đầu đến dấu '}' cuối "
+            "và dán lại vào Repository Secret 'GCP_SA_KEY'."
+        )
 
     if parsed.get("type") != "service_account":
         raise ValueError(

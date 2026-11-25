@@ -36,8 +36,6 @@ permissions:
   contents: read
 
 env:
-  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-  GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
   PIPELINE_LANGUAGE: ${{ github.event.inputs.language || 'vi-VN' }}
   PIPELINE_ASPECT_RATIO: ${{ github.event.inputs.aspect_ratio || '16:9' }}
   VIDEO_VISUAL_MODE: 'stickman_whiteboard'
@@ -57,6 +55,9 @@ jobs:
     name: Stage 1 — Script Planner & 3-Tier Dedup
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
 
     steps:
       - name: Checkout repository
@@ -77,6 +78,10 @@ jobs:
         env:
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
         run: |
+          if [ -z "$GCP_SA_KEY" ]; then
+            echo "::error::Repository secret GCP_SA_KEY dang bi trong! Vao Settings -> Secrets and variables -> Actions -> Repository secrets va tao secret ten GCP_SA_KEY."
+            exit 1
+          fi
           printf '%s' "$GCP_SA_KEY" > "${{ runner.temp }}/gcp-sa-key.json"
           echo "GOOGLE_APPLICATION_CREDENTIALS=${{ runner.temp }}/gcp-sa-key.json" >> $GITHUB_ENV
 
@@ -102,6 +107,9 @@ jobs:
     needs: job1_plan_scripts
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
     strategy:
       fail-fast: false
       matrix:
@@ -137,6 +145,10 @@ jobs:
         env:
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
         run: |
+          if [ -z "$GCP_SA_KEY" ]; then
+            echo "::error::Repository secret GCP_SA_KEY dang bi trong! Vao Settings -> Secrets and variables -> Actions -> Repository secrets va tao secret ten GCP_SA_KEY."
+            exit 1
+          fi
           printf '%s' "$GCP_SA_KEY" > "${{ runner.temp }}/gcp-sa-key.json"
           echo "GOOGLE_APPLICATION_CREDENTIALS=${{ runner.temp }}/gcp-sa-key.json" >> $GITHUB_ENV
 

@@ -1,0 +1,6 @@
+{
+  "name": "Stoic Automation Pipeline Studio",
+  "description": "Dự án Python & GitHub Actions tự động hóa sản xuất 5 video Khắc kỷ 2D mỗi ngày với Vertex AI, Auto-Fallback, Anti-Duplication 3 tầng và Google Drive.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
