@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+service-account-key.json
+credentials.json
+gcp-key.json
+output/
+workdir/
+*.mp4
+*.mp3
+*.wav
+.DS_Store
