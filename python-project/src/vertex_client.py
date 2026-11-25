@@ -230,6 +230,19 @@ class VertexAIClient:
             )
             text = response.text or ""
             parsed = json.loads(_strip_json_fences(text))
+            if isinstance(parsed, list):
+                if len(parsed) == 1 and isinstance(parsed[0], dict):
+                    parsed = parsed[0]
+                elif len(parsed) > 1 and isinstance(parsed[0], dict) and (
+                    "narration" in parsed[0] or "scene_id" in parsed[0]
+                ):
+                    parsed = {"scenes": parsed}
+                elif len(parsed) > 0 and isinstance(parsed[0], dict):
+                    parsed = parsed[0]
+                else:
+                    raise ValueError(f"Model '{model_name}' trả về JSON list rỗng/không hợp lệ.")
+            if not isinstance(parsed, dict):
+                raise ValueError(f"Model '{model_name}' trả về kiểu JSON không phải object.")
             logger.info("[LLM OK] Task='%s' | Model='%s'", task_name, model_name)
             return parsed
 

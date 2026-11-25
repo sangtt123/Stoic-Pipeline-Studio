@@ -176,12 +176,28 @@ def _evaluate_script_with_critic(
     )
 
 
-def _normalize_script(raw_script: Dict[str, Any], combo: MatrixCombo, video_index: int) -> Dict[str, Any]:
+def _normalize_script(raw_script: Any, combo: MatrixCombo, video_index: int) -> Dict[str, Any]:
     """Chuẩn hóa cấu trúc kịch bản, đảm bảo đủ trường dữ liệu và phong cách 2D đồng nhất."""
+    if isinstance(raw_script, list):
+        if len(raw_script) == 1 and isinstance(raw_script[0], dict):
+            raw_script = raw_script[0]
+        elif len(raw_script) > 0 and isinstance(raw_script[0], dict) and (
+            "narration" in raw_script[0] or "scene_id" in raw_script[0]
+        ):
+            raw_script = {"scenes": raw_script}
+        else:
+            raw_script = {}
+    if not isinstance(raw_script, dict):
+        raw_script = {}
+
     scenes_clean: List[Dict[str, Any]] = []
     raw_scenes = raw_script.get("scenes", [])
+    if not isinstance(raw_scenes, list):
+        raw_scenes = []
 
     for idx, scene in enumerate(raw_scenes):
+        if not isinstance(scene, dict):
+            continue
         motion = scene.get("motion_type", ALLOWED_MOTIONS[idx % len(ALLOWED_MOTIONS)])
         if motion not in ALLOWED_MOTIONS:
             motion = ALLOWED_MOTIONS[idx % len(ALLOWED_MOTIONS)]
