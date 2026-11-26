@@ -25,6 +25,17 @@ from src.vertex_client import VertexAIClient
 logger = logging.getLogger("tts_generator")
 
 
+def _is_cloud_tts_api_disabled(exc: Exception) -> bool:
+    """Phát hiện lỗi Cloud Text-to-Speech API chưa bật hoặc bị chặn quyền (403 SERVICE_DISABLED)."""
+    msg = str(exc).upper()
+    return (
+        "SERVICE_DISABLED" in msg
+        or "API HAS NOT BEEN USED" in msg
+        or "IT IS DISABLED" in msg
+        or ("403" in msg and "TEXTTOSPEECH" in msg)
+    )
+
+
 def get_audio_duration(audio_path: Path) -> float:
     """Đo chính xác thời lượng file audio (giây) bằng ffprobe."""
     cmd = [
@@ -37,7 +48,13 @@ def get_audio_duration(audio_path: Path) -> float:
         "default=noprint_wrappers=1:nokey=1",
         str(audio_path),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0 or not result.stdout.strip():
+        size = audio_path.stat().st_size if audio_path.exists() else -1
+        raise RuntimeError(
+            f"ffprobe không đọc được file audio '{audio_path.name}' (size={size}B, exit={result.returncode}): "
+            f"{result.stderr.strip()}"
+        )
     return float(result.stdout.strip())
 
 
@@ -52,6 +69,7 @@ class TTSGenerator:
         self.language = language or config.LANGUAGE
         self.vertex = vertex
         self._cloud_tts_client: Optional[texttospeech.TextToSpeechClient] = None
+        self._cloud_tts_disabled: bool = False
         self.voice_chain = config.TTS_VOICE_CHAINS.get(
             self.language, config.TTS_VOICE_CHAINS["en-US"]
         )
@@ -65,6 +83,9 @@ class TTSGenerator:
 
     def _synthesize_with_cloud_tts(self, clean_text: str, mp3_path: Path) -> Tuple[Path, float]:
         """Tầng dự phòng: Google Cloud Text-to-Speech (Studio / Chirp3-HD / Neural2)."""
+        if self._cloud_tts_disabled:
+            raise RuntimeError("Cloud Text-to-Speech API đang tắt trên GCP Project (đã bỏ qua nhanh).")
+
         client = self._get_cloud_tts_client()
         last_exc: Optional[Exception] = None
 
@@ -106,6 +127,14 @@ class TTSGenerator:
 
             except Exception as exc:
                 last_exc = exc
+                if _is_cloud_tts_api_disabled(exc):
+                    self._cloud_tts_disabled = True
+                    logger.warning(
+                        "[CLOUD TTS DISABLED] Cloud Text-to-Speech API chưa được bật trên GCP Project (%s). "
+                        "Chuyển hẳn sang Vertex AI Gemini TTS cho toàn bộ các phân cảnh còn lại!",
+                        exc,
+                    )
+                    break
                 logger.warning(
                     "[CLOUD TTS FALLBACK] Giọng '%s' lỗi (%s). Chuyển giọng dự phòng kế tiếp...",
                     voice_opt.voice_name,
@@ -131,7 +160,10 @@ class TTSGenerator:
         wav_path = output_stem_path.with_suffix(".wav")
         mp3_path = output_stem_path.with_suffix(".mp3")
 
-        if config.TTS_PRIMARY_PROVIDER == "gemini_tts" and self.vertex is not None:
+        if (
+            (config.TTS_PRIMARY_PROVIDER == "gemini_tts" or self._cloud_tts_disabled)
+            and self.vertex is not None
+        ):
             try:
                 self.vertex.synthesize_speech_wav(
                     text=clean_text,
@@ -148,6 +180,8 @@ class TTSGenerator:
                 )
                 return wav_path, duration
             except Exception as exc:
+                if self._cloud_tts_disabled:
+                    raise
                 logger.warning(
                     "[TTS PROVIDER FALLBACK] Vertex AI Gemini TTS lỗi (%s). "
                     "Tự động chuyển sang Google Cloud Text-to-Speech...",
@@ -174,4 +208,9 @@ class TTSGenerator:
                 task_name=f"tts_fallback_{output_stem_path.stem}",
             )
             duration = get_audio_duration(wav_path)
+            logger.info(
+                "[TTS DURATION] File='%s' | Duration=%.2fs (Vertex AI Gemini TTS Fallback)",
+                wav_path.name,
+                duration,
+            )
             return wav_path, duration

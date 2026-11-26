@@ -265,7 +265,8 @@ def run_worker(video_index: int) -> None:
     drive = DriveManager()
 
     logger.info(
-        "========== BẮT ĐẦU SẢN XUẤT VIDEO #%d: '%s' (%d cảnh | %s) ==========",
+        "[PIPELINE BUILD %s] ========== BẮT ĐẦU SẢN XUẤT VIDEO #%d: '%s' (%d cảnh | %s) ==========",
+        getattr(config, "PIPELINE_BUILD", "v3.4"),
         video_index,
         script["title"],
         len(scenes),

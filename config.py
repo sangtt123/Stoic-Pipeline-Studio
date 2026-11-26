@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
 
-PIPELINE_BUILD: str = "v3.3"
+PIPELINE_BUILD: str = "v3.4"
 
 # ==============================================================================
 # 1. CẤU HÌNH CÁ NHÂN (Tùy chỉnh trước khi chạy)
@@ -83,7 +83,7 @@ IMAGEN_FALLBACK_MODELS: List[str] = [
 ]
 
 # Chuỗi Tạo giọng đọc AI tự nhiên (Gemini Native TTS -> tự động fallback xuống Google Cloud TTS)
-TTS_PRIMARY_PROVIDER: str = os.getenv("TTS_PRIMARY_PROVIDER", "cloud_tts")
+TTS_PRIMARY_PROVIDER: str = os.getenv("TTS_PRIMARY_PROVIDER", "gemini_tts")
 TTS_FALLBACK_MODELS: List[str] = [
     "gemini-2.5-flash-tts",
     "gemini-3.8-flash-tts",

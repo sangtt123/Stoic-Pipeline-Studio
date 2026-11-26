@@ -26,7 +26,7 @@ on:
       tts_provider:
         description: 'Hệ thống tạo giọng đọc ưu tiên'
         required: false
-        default: 'cloud_tts'
+        default: 'gemini_tts'
         type: choice
         options:
           - gemini_tts
@@ -40,7 +40,7 @@ env:
   PIPELINE_ASPECT_RATIO: ${{ github.event.inputs.aspect_ratio || '16:9' }}
   VIDEO_VISUAL_MODE: 'stickman_whiteboard'
   PEN_SKETCH_PAPER_THEME: 'classic_parchment'
-  TTS_PRIMARY_PROVIDER: ${{ github.event.inputs.tts_provider || 'cloud_tts' }}
+  TTS_PRIMARY_PROVIDER: ${{ github.event.inputs.tts_provider || 'gemini_tts' }}
   TTS_VOICE_PERSONA: 'Puck'
   DAILY_VIDEO_COUNT: '5'
   VERTEX_LLM_LOCATION: 'global'

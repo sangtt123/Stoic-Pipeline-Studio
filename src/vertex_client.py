@@ -9,11 +9,14 @@ Cơ chế xử lý lỗi 2 lớp:
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import random
 import re
+import subprocess
 import time
+import wave
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, TypeVar
 
@@ -561,6 +564,74 @@ class VertexAIClient:
             caller=_call,
         )
 
+    @staticmethod
+    def _write_audio_as_valid_wav(raw_data: bytes, mime_type: str, output_path: Path) -> None:
+        """
+        Đảm bảo dữ liệu âm thanh trả về từ Gemini TTS (thường là raw PCM 16-bit 24kHz không có header,
+        hoặc đôi khi là WAV/MP3/OGG) luôn được lưu thành file RIFF/WAV chuẩn mà FFprobe & FFmpeg đọc 100%.
+        """
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        mime_lower = (mime_type or "").lower()
+
+        # Trường hợp 1: Đã là file RIFF/WAV chuẩn
+        if len(raw_data) >= 12 and raw_data[:4] == b"RIFF" and raw_data[8:12] == b"WAVE":
+            output_path.write_bytes(raw_data)
+            return
+
+        # Trường hợp 2: Là container âm thanh nén (MP3, OGG, FLAC, MP4/M4A...) -> transcode sang WAV chuẩn
+        is_encoded_container = (
+            any(tok in mime_lower for tok in ("mpeg", "mp3", "ogg", "opus", "flac", "mp4", "m4a", "aac"))
+            or raw_data[:3] == b"ID3"
+            or raw_data[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2")
+            or raw_data[:4] in (b"OggS", b"fLaC")
+        )
+        if is_encoded_container:
+            tmp_encoded = output_path.with_suffix(".tmp_tts_raw")
+            try:
+                tmp_encoded.write_bytes(raw_data)
+                subprocess.run(
+                    [
+                        "ffmpeg",
+                        "-y",
+                        "-i",
+                        str(tmp_encoded),
+                        "-ar",
+                        "24000",
+                        "-ac",
+                        "1",
+                        "-c:a",
+                        "pcm_s16le",
+                        str(output_path),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                return
+            finally:
+                tmp_encoded.unlink(missing_ok=True)
+
+        # Trường hợp 3 (phổ biến nhất ở Gemini TTS): Raw PCM 16-bit signed little-endian (audio/L16;codec=pcm;rate=24000)
+        rate_match = re.search(r"rate=(\d+)", mime_lower)
+        sample_rate = int(rate_match.group(1)) if rate_match else 24000
+        chan_match = re.search(r"channels?=(\d+)", mime_lower)
+        channels = int(chan_match.group(1)) if chan_match else 1
+
+        # Đảm bảo độ dài byte chẵn cho PCM 16-bit (2 bytes/sample)
+        frame_bytes = 2 * channels
+        usable_len = len(raw_data) - (len(raw_data) % frame_bytes)
+        if usable_len <= 0:
+            raise RuntimeError(
+                f"Dữ liệu PCM từ Gemini TTS quá ngắn ({len(raw_data)} bytes, mime='{mime_type}')."
+            )
+        pcm_payload = raw_data[:usable_len]
+
+        with wave.open(str(output_path), "wb") as wf:
+            wf.setnchannels(channels)
+            wf.setsampwidth(2)  # 16-bit PCM
+            wf.setframerate(sample_rate)
+            wf.writeframes(pcm_payload)
+
     def synthesize_speech_wav(
         self,
         text: str,
@@ -570,8 +641,9 @@ class VertexAIClient:
         task_name: str = "gemini_tts",
     ) -> Path:
         """
-        Tạo giọng đọc WAV 24kHz tự nhiên bằng chuỗi Gemini TTS (`gemini-3.8-flash-tts` ->
-        `gemini-3.8-flash-lite-tts`), tự động backoff & hạ cấp model khi gặp 429/503.
+        Tạo giọng đọc WAV 24kHz tự nhiên bằng chuỗi Gemini TTS (`gemini-2.5-flash-tts` ->
+        `gemini-3.8-flash-tts` -> `gemini-3.8-flash-lite-tts`), tự động định tuyến endpoint
+        (us-central1 / global) và tự động đóng gói chuẩn RIFF/WAV header cho dữ liệu raw PCM.
         """
         selected_voice = voice_name or config.TTS_VOICE_PERSONA
         selected_style = voice_style or config.TTS_VOICE_STYLE
@@ -581,40 +653,60 @@ class VertexAIClient:
         )
 
         def _call(model_name: str) -> Path:
-            response = self.llm_client.models.generate_content(
-                model=model_name,
-                contents=styled_prompt,
-                config=types.GenerateContentConfig(
-                    response_modalities=["AUDIO"],
-                    speech_config=types.SpeechConfig(
-                        voice_config=types.VoiceConfig(
-                            prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                                voice_name=selected_voice
-                            )
+            gen_config = types.GenerateContentConfig(
+                response_modalities=["AUDIO"],
+                speech_config=types.SpeechConfig(
+                    voice_config=types.VoiceConfig(
+                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                            voice_name=selected_voice
                         )
-                    ),
+                    )
                 ),
             )
+            response = self._generate_content_smart(
+                model_name=model_name,
+                contents=styled_prompt,
+                gen_config=gen_config,
+            )
             candidates = response.candidates or []
-            audio_bytes: Optional[bytes] = None
+            audio_chunks: List[bytes] = []
+            detected_mime: str = ""
             for cand in candidates:
                 if cand.content and cand.content.parts:
                     for part in cand.content.parts:
                         if part.inline_data and part.inline_data.data:
-                            audio_bytes = part.inline_data.data
-                            break
-                if audio_bytes:
-                    break
+                            raw_part = part.inline_data.data
+                            if isinstance(raw_part, str):
+                                raw_part = base64.b64decode(raw_part)
+                            elif isinstance(raw_part, bytearray):
+                                raw_part = bytes(raw_part)
+                            if raw_part:
+                                audio_chunks.append(raw_part)
+                                if not detected_mime and part.inline_data.mime_type:
+                                    detected_mime = part.inline_data.mime_type
 
-            if not audio_bytes:
-                raise RuntimeError(f"Gemini TTS ({model_name}) không trả về dữ liệu âm thanh.")
+            audio_bytes = b"".join(audio_chunks)
+            if not audio_bytes or len(audio_bytes) < 64:
+                raise RuntimeError(f"Gemini TTS ({model_name}) không trả về dữ liệu âm thanh hợp lệ.")
 
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_bytes(audio_bytes)
+            self._write_audio_as_valid_wav(audio_bytes, detected_mime, output_path)
+
+            # Kiểm định nhanh file WAV vừa ghi có thể đọc được số khung hình > 0
+            try:
+                with wave.open(str(output_path), "rb") as check_wf:
+                    if check_wf.getnframes() <= 0 or check_wf.getframerate() <= 0:
+                        raise RuntimeError("File WAV có 0 khung hình âm thanh.")
+            except wave.Error as wav_err:
+                raise RuntimeError(
+                    f"File WAV sau khi ghi từ Gemini TTS không hợp lệ ({wav_err}, mime='{detected_mime}')."
+                ) from wav_err
+
             logger.info(
-                "[GEMINI TTS OK] Model='%s' | Voice='%s' | Saved=%s",
+                "[GEMINI TTS OK] Model='%s' | Voice='%s' | Mime='%s' | Size=%dB | Saved=%s",
                 model_name,
                 selected_voice,
+                detected_mime or "raw_pcm",
+                output_path.stat().st_size,
                 output_path.name,
             )
             return output_path
