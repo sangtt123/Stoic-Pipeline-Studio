@@ -12,12 +12,15 @@ from contextlib import contextmanager
 import io
 import json
 import logging
+import os
 import re
 import ssl
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, TypeVar
 
+from google.auth.transport.requests import Request as GoogleAuthRequest
+from google.oauth2.credentials import Credentials as OAuthCredentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload, MediaIoBaseUpload
@@ -31,29 +34,109 @@ T = TypeVar("T")
 _LEADING_NUMBER_RE = re.compile(r"^\s*(\d+)(?:[\s._\-–—]|$)")
 _INVALID_FOLDER_CHARS_RE = re.compile(r'[/\\:*?"<>|\r\n\t]+')
 _RETRYABLE_HTTP_CODES = {429, 500, 502, 503, 504}
+_DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
+
+
+def is_storage_quota_error(exc: BaseException) -> bool:
+    """Kiểm tra lỗi 403 storageQuotaExceeded khi Service Account tạo file mới trên My Drive cá nhân."""
+    if not isinstance(exc, HttpError):
+        return False
+    msg = str(exc)
+    return "storageQuotaExceeded" in msg or "Service Accounts do not have storage quota" in msg
+
+
+def _try_load_personal_oauth_credentials() -> Optional[OAuthCredentials]:
+    """
+    Hỗ trợ xác thực Google Drive bằng OAuth cá nhân (tài khoản Gmail thường có đủ 15GB+ dung lượng):
+    - Biến môi trường `GDRIVE_OAUTH_TOKEN_JSON` chứa JSON:
+      {"client_id": "...", "client_secret": "...", "refresh_token": "..."}
+    - Hoặc 3 biến `GDRIVE_OAUTH_CLIENT_ID`, `GDRIVE_OAUTH_CLIENT_SECRET`, `GDRIVE_OAUTH_REFRESH_TOKEN`
+    - Hoặc file `gdrive-oauth-token.json` ở thư mục gốc dự án.
+    """
+    raw_json = os.getenv("GDRIVE_OAUTH_TOKEN_JSON", "").strip()
+    token_file = Path(config.BASE_DIR) / "gdrive-oauth-token.json"
+    info: Optional[Dict[str, Any]] = None
+
+    if raw_json:
+        cleaned = raw_json.lstrip("\ufeff").strip()
+        if (cleaned.startswith("'") and cleaned.endswith("'")) or (
+            cleaned.startswith('"') and cleaned.endswith('"') and '\\"' in cleaned
+        ):
+            cleaned = cleaned[1:-1].strip()
+        try:
+            parsed = json.loads(cleaned)
+            if isinstance(parsed, dict):
+                info = parsed
+        except Exception as exc:
+            raise ValueError(
+                f"Secret GDRIVE_OAUTH_TOKEN_JSON không phải JSON hợp lệ: {exc}"
+            ) from exc
+    elif token_file.exists():
+        info = json.loads(token_file.read_text(encoding="utf-8").lstrip("\ufeff"))
+    else:
+        cid = os.getenv("GDRIVE_OAUTH_CLIENT_ID", "").strip()
+        csec = os.getenv("GDRIVE_OAUTH_CLIENT_SECRET", "").strip()
+        rtok = os.getenv("GDRIVE_OAUTH_REFRESH_TOKEN", "").strip()
+        if cid and csec and rtok:
+            info = {
+                "client_id": cid,
+                "client_secret": csec,
+                "refresh_token": rtok,
+            }
+
+    if not info:
+        return None
+
+    client_id = str(info.get("client_id") or "").strip()
+    client_secret = str(info.get("client_secret") or "").strip()
+    refresh_token = str(info.get("refresh_token") or "").strip()
+    if not (client_id and client_secret and refresh_token):
+        raise ValueError(
+            "GDRIVE_OAUTH_TOKEN_JSON thiếu trường bắt buộc: cần đủ 'client_id', 'client_secret', 'refresh_token'."
+        )
+
+    return OAuthCredentials(
+        token=info.get("access_token") or info.get("token"),
+        refresh_token=refresh_token,
+        token_uri=str(info.get("token_uri") or "https://oauth2.googleapis.com/token"),
+        client_id=client_id,
+        client_secret=client_secret,
+        scopes=_DRIVE_SCOPES,
+    )
 
 
 class DriveManager:
     """
-    Wrapper an toàn cho Google Drive API v3 (xác thực qua file Service Account JSON).
-    KHÔNG giữ kết nối Drive mở xuyên suốt phiên chạy: chỉ mở kết nối mới ngay trước
-    mỗi lần đọc/upload và đóng ngay lập tức sau khi hoàn tất để tránh triệt để lỗi BrokenPipeError.
+    Wrapper an toàn cho Google Drive API v3:
+    - Ưu tiên dùng OAuth cá nhân (`GDRIVE_OAUTH_TOKEN_JSON`) nếu có để upload thoải mái vào Gmail Drive cá nhân (15GB+).
+    - Tự động fallback về Service Account (`GCP_SA_KEY`) nếu dùng Google Workspace Shared Drive.
+    - KHÔNG giữ kết nối mở xuyên suốt phiên chạy: chỉ mở ngay trước mỗi lần đọc/upload và đóng ngay khi xong.
     """
 
     def __init__(self, folder_id: Optional[str] = None) -> None:
         self.folder_id = folder_id or config.GDRIVE_FOLDER_ID
         if not self.folder_id:
             raise EnvironmentError(
-                "Thiếu biến môi trường GDRIVE_FOLDER_ID. Hãy chia sẻ thư mục Google Drive "
-                "cho email Service Account (quyền Editor) và lưu Folder ID vào GitHub Secrets hoặc .env."
+                "Thiếu biến môi trường GDRIVE_FOLDER_ID. Hãy lưu Folder ID vào GitHub Secrets hoặc .env."
             )
 
-        auth = load_gcp_service_account()
-        self._credentials = auth.credentials
+        oauth_creds = _try_load_personal_oauth_credentials()
+        if oauth_creds is not None:
+            self._credentials: Any = oauth_creds
+            self.auth_mode = "personal_oauth"
+            logger.info("[DRIVE AUTH] Dùng OAuth cá nhân (GDRIVE_OAUTH_TOKEN_JSON) — đầy đủ dung lượng Google Drive cá nhân.")
+        else:
+            auth = load_gcp_service_account()
+            self._credentials = auth.credentials
+            self.auth_mode = "service_account"
+            logger.info("[DRIVE AUTH] Dùng Service Account (%s). Lưu ý: Gmail My Drive cá nhân cần GDRIVE_OAUTH_TOKEN_JSON hoặc Shared Drive.", auth.client_email)
 
     @contextmanager
     def _open_service(self) -> Iterator[Any]:
         """Mở kết nối Google Drive mới đúng lúc cần dùng và luôn đóng ngay khi xong."""
+        if self.auth_mode == "personal_oauth":
+            if not self._credentials.valid or not self._credentials.token:
+                self._credentials.refresh(GoogleAuthRequest())
         service = build("drive", "v3", credentials=self._credentials, cache_discovery=False)
         try:
             yield service

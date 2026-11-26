@@ -94,13 +94,32 @@ class DedupManager:
 
     def save_history(self) -> None:
         """Ghi đè history_log.json lên lại Google Drive sau khi hoàn tất lập kế hoạch."""
+        from pathlib import Path
+        from src.drive_manager import is_storage_quota_error
+
         payload = {
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "retention_days": config.HISTORY_RETENTION_DAYS,
             "total_records": len(self.entries),
             "videos": self.entries,
         }
-        self.drive.upsert_json(config.HISTORY_FILENAME, payload)
+        # Luôn lưu bản dự phòng cục bộ
+        local_history = Path(config.OUTPUT_DIR) / config.HISTORY_FILENAME
+        local_history.parent.mkdir(parents=True, exist_ok=True)
+        local_history.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        try:
+            self.drive.upsert_json(config.HISTORY_FILENAME, payload)
+        except Exception as exc:
+            if is_storage_quota_error(exc):
+                logger.warning(
+                    "[DRIVE QUOTA] Service Account không có dung lượng lưu trữ để tạo tệp mới trên "
+                    "My Drive cá nhân (403 storageQuotaExceeded). Hãy thêm secret GDRIVE_OAUTH_TOKEN_JSON "
+                    "(OAuth tài khoản Gmail cá nhân) hoặc dùng Shared Drive. Đã bỏ qua lưu history lên Drive "
+                    "để tiếp tục sang Stage 2!"
+                )
+                return
+            raise
 
     def register_approved_script(self, script: Dict[str, Any], embedding: List[float]) -> None:
         """Lưu kịch bản đã được duyệt vào bộ nhớ hiện tại (để chống trùng ngay trong cùng ngày)."""

@@ -58,6 +58,7 @@ jobs:
     env:
       GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
       GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+      GDRIVE_OAUTH_TOKEN_JSON: ${{ secrets.GDRIVE_OAUTH_TOKEN_JSON }}
 
     steps:
       - name: Checkout repository
@@ -110,6 +111,7 @@ jobs:
     env:
       GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
       GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+      GDRIVE_OAUTH_TOKEN_JSON: ${{ secrets.GDRIVE_OAUTH_TOKEN_JSON }}
     strategy:
       fail-fast: false
       matrix:
@@ -156,6 +158,15 @@ jobs:
         env:
           VIDEO_INDEX: ${{ matrix.video_index }}
         run: python -m src.step2_video_worker
+
+      - name: Upload rendered video & thumbnail backup artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stoic-video-${{ matrix.video_index }}
+          path: output/artifacts/video_${{ matrix.video_index }}
+          retention-days: 7
+          if-no-files-found: ignore
 
       - name: Cleanup credentials
         if: always()

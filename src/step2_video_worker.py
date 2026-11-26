@@ -386,25 +386,45 @@ def run_worker(video_index: int) -> None:
         if not review_passed:
             remote_video_name = f"[CHECK_REQUIRED]_{remote_video_name}"
 
+        # Luôn lưu bản sao vào output/artifacts/video_{video_index} để GitHub Actions đính kèm tải về
+        artifact_dir = Path(config.OUTPUT_DIR) / "artifacts" / f"video_{video_index}"
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(final_local_mp4, artifact_dir / remote_video_name)
+        shutil.copy2(final_thumbnail_png, artifact_dir / final_thumbnail_png.name)
+        logger.info("[ARTIFACT READY] Đã lưu bản dự phòng tại %s", artifact_dir)
+
         # Tạo thư mục con theo chủ đề & số thứ tự kế tiếp trên Google Drive, rồi upload Video + Thumbnail vào chung 1 folder
-        video_folder_id = drive.get_or_create_subfolder(drive_folder_name)
-        drive.upload_video(
-            final_local_mp4,
-            remote_filename=remote_video_name,
-            target_folder_id=video_folder_id,
-        )
-        drive.upload_thumbnail(
-            final_thumbnail_png,
-            remote_filename=final_thumbnail_png.name,
-            target_folder_id=video_folder_id,
-        )
-        logger.info(
-            "[WORKER #%d DONE] Đã upload Video ('%s') & Thumbnail ('%s') vào thư mục Drive '%s'.",
-            video_index,
-            remote_video_name,
-            final_thumbnail_png.name,
-            drive_folder_name,
-        )
+        from src.drive_manager import is_storage_quota_error
+
+        try:
+            video_folder_id = drive.get_or_create_subfolder(drive_folder_name)
+            drive.upload_video(
+                final_local_mp4,
+                remote_filename=remote_video_name,
+                target_folder_id=video_folder_id,
+            )
+            drive.upload_thumbnail(
+                final_thumbnail_png,
+                remote_filename=final_thumbnail_png.name,
+                target_folder_id=video_folder_id,
+            )
+            logger.info(
+                "[WORKER #%d DONE] Đã upload Video ('%s') & Thumbnail ('%s') vào thư mục Drive '%s'.",
+                video_index,
+                remote_video_name,
+                final_thumbnail_png.name,
+                drive_folder_name,
+            )
+        except Exception as drive_err:
+            if is_storage_quota_error(drive_err):
+                logger.warning(
+                    "[DRIVE QUOTA] Không thể upload Video #%d lên My Drive cá nhân bằng Service Account "
+                    "(403 storageQuotaExceeded). Hãy thêm secret GDRIVE_OAUTH_TOKEN_JSON (OAuth Gmail cá nhân). "
+                    "Video & Thumbnail đã được lưu an toàn trong GitHub Actions Artifacts!",
+                    video_index,
+                )
+            else:
+                raise
 
     finally:
         # Xóa sạch toàn bộ file tạm sau khi hoàn tất để giữ sạch ổ đĩa runner

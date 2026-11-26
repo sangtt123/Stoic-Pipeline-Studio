@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
 
-PIPELINE_BUILD: str = "v2.7"
+PIPELINE_BUILD: str = "v2.9"
 
 # ==============================================================================
 # 1. CẤU HÌNH CÁ NHÂN (Tùy chỉnh trước khi chạy)
@@ -69,11 +69,12 @@ VERTEX_EMBEDDING_LOCATION: str = os.getenv("VERTEX_EMBEDDING_LOCATION", "us-cent
 # ==============================================================================
 
 LLM_FALLBACK_MODELS: List[str] = [
-    "gemini-2.5-flash",
+    "gemini-4-hydrogen",
     "gemini-3-flash-preview",
-    "gemini-2.5-pro",
+    "gemini-4-neon",
     "gemini-3.1-pro-preview",
-    "gemini-3.1-flash-lite-preview",
+    "gemini-2.5-flash",
+    "gemini-3.1-flash-lite",
 ]
 
 IMAGEN_FALLBACK_MODELS: List[str] = [
