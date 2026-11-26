@@ -9,10 +9,12 @@ Tầng 3: Kiểm tra độ tương đồng ngữ nghĩa bằng Vertex AI Text Em
 
 from __future__ import annotations
 
+import json
 import logging
 import random
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -29,16 +31,20 @@ class MatrixCombo:
     philosopher: str
     modern_context: str
     narrative_hook: str
+    working_angle: str = ""
 
     def signature(self) -> str:
         return f"{self.philosopher} || {self.modern_context} || {self.narrative_hook}"
 
     def to_prompt_block(self) -> str:
-        return (
-            f"- Triết gia / Trường phái trọng tâm: {self.philosopher}\n"
-            f"- Bối cảnh đời thực hiện đại: {self.modern_context}\n"
-            f"- Cấu trúc kể chuyện (Narrative Hook): {self.narrative_hook}"
-        )
+        lines = [
+            f"- Lăng kính / Lĩnh vực / Nhân vật gợi mở: {self.philosopher}",
+            f"- Vấn đề / Tình huống đời thực cụ thể: {self.modern_context}",
+            f"- Hình thức kể chuyện & cấu trúc: {self.narrative_hook}",
+        ]
+        if self.working_angle:
+            lines.append(f"- Luận điểm cốt lõi cần khai thác: {self.working_angle}")
+        return "\n".join(lines)
 
 
 def _cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:
@@ -154,14 +160,98 @@ class DedupManager:
         return "\n".join(lines)
 
     # ------------------------------------------------------------------
-    # TẦNG 2: Ma trận kết hợp ngẫu nhiên có kiểm soát (Angle & Persona Matrix)
+    # TẦNG 2: Động cơ Mở rộng Ý tưởng Tự do (Open-World AI Brainstorming)
+    #         + Dự phòng Ma trận Đa lĩnh vực (KHÔNG gò bó danh sách cứng)
     # ------------------------------------------------------------------
+    def _brainstorm_open_angles(
+        self, count: int, exclude_signatures: Optional[set[str]] = None
+    ) -> List[MatrixCombo]:
+        """
+        Gọi LLM sinh `count` ý tưởng hoàn toàn mới, mở rộng tự do sang nhiều lĩnh vực
+        (tâm lý học, khoa học thần kinh, kinh tế hành vi, lịch sử Đông–Tây, chiến lược,
+        tài chính, giao tiếp, tiểu sử nhân vật thực tế, triết học...) mà vẫn bám tinh thần
+        CHANNEL_TOPIC và TRÁNH TUYỆT ĐỐI mọi chủ đề đã làm trong 90 ngày qua.
+        """
+        lang_hint = "Tiếng Việt" if config.LANGUAGE.startswith("vi") else "English"
+        history_digest = self.build_history_exclusion_digest(max_items=60)
+        excluded_today = "\n".join(f"- {sig}" for sig in sorted(exclude_signatures or set())) or "(Chưa có)"
+
+        prompt = (
+            f"Hãy lên ý tưởng cho ĐÚNG {count} video YouTube giải thích (explainer ~5 phút) "
+            f"bằng {lang_hint} cho kênh có định hướng rộng: {config.CHANNEL_TOPIC}.\n\n"
+            "NGUYÊN TẮC MỞ RỘNG NỘI DUNG (QUAN TRỌNG — ĐỂ KÊNH KHÔNG BỊ LẶP KHUÔN):\n"
+            "1. KHÔNG BỊ GÒ BÓ vào 5–6 cái tên Khắc kỷ quen thuộc! Hãy tự do mở rộng biên độ sáng tạo sang "
+            "nhiều lĩnh vực giàu giá trị cho người trưởng thành: tâm lý học hành vi, khoa học thần kinh về thói quen "
+            "& cảm xúc, kinh tế học hành vi, thiên kiến nhận thức, chiến lược cổ kim (Đông & Tây), tiểu sử nhân vật "
+            "lịch sử / doanh nhân / khoa học gia ít người biết, tư duy tài chính, đàm phán & giao tiếp sắc bén, "
+            "nghệ thuật ra quyết định, hiệu suất sâu, bản lĩnh trong các mối quan hệ, triết học sống hiện đại...\n"
+            f"2. MỖI video trong số {count} video hôm nay PHẢI thuộc một LĨNH VỰC / LĂNG KÍNH, một TÌNH HUỐNG ĐỜI THỰC "
+            "cụ thể và một HÌNH THỨC KỂ CHUYỆN hoàn toàn khác nhau (trực giao 100%, không trùng ý tưởng lẫn nhau).\n"
+            "3. CẤM TUYỆT ĐỐI lặp lại các khuôn sáo cũ kỹ như 'Thử thách 7 ngày', 'Biến mất 90 ngày', "
+            "'Nghệ thuật rời đi trong im lặng', hoặc cấu trúc tiêu đề 'Nghịch lý của...' lặp đi lặp lại.\n"
+            "4. TUYỆT ĐỐI KHÔNG trùng chủ đề, nhân vật trọng tâm hoặc bài học cốt lõi với lịch sử 90 ngày dưới đây:\n"
+            f"{history_digest[:3500]}\n\n"
+            f"Các tổ hợp đã chọn trong hôm nay (KHÔNG lặp lại):\n{excluded_today}\n\n"
+            "Trả về JSON object đúng định dạng:\n"
+            "{\n"
+            '  "concepts": [\n'
+            "    {\n"
+            '      "domain_lens": "Lăng kính / học thuyết / nhân vật / ngành khoa học cụ thể",\n'
+            '      "real_world_situation": "Tình huống đời sống hiện đại rất cụ thể và mới mẻ",\n'
+            '      "storytelling_format": "Cấu trúc kể chuyện riêng (vd: phân tích thí nghiệm tâm lý, câu chuyện lịch sử thực, bóc tách sai lầm tư duy, mô hình ra quyết định...)",\n'
+            '      "working_angle": "Luận điểm sắc bén, khác biệt trong 1 câu ngắn"\n'
+            "    }\n"
+            "  ]\n"
+            "}"
+        )
+
+        raw = self.vertex.generate_json(
+            prompt=prompt,
+            system_instruction=(
+                "Bạn là Giám đốc Nội dung sáng tạo đẳng cấp quốc tế. Nhiệm vụ của bạn là mở rộng đề tài "
+                "thật phong phú, sắc sảo, mới lạ theo nhiều góc nhìn đa ngành, tuyệt đối không lặp lối mòn."
+            ),
+            temperature=0.95,
+            task_name="brainstorm_open_angles",
+        )
+
+        raw_concepts = raw.get("concepts") if isinstance(raw, dict) else None
+        if not isinstance(raw_concepts, list):
+            return []
+
+        combos: List[MatrixCombo] = []
+        seen_sigs = set(exclude_signatures or set())
+        for item in raw_concepts:
+            if not isinstance(item, dict):
+                continue
+            lens = str(item.get("domain_lens") or "").strip()
+            sit = str(item.get("real_world_situation") or "").strip()
+            fmt = str(item.get("storytelling_format") or "").strip()
+            angle = str(item.get("working_angle") or "").strip()
+            if not (lens and sit and fmt):
+                continue
+            combo = MatrixCombo(
+                philosopher=lens,
+                modern_context=sit,
+                narrative_hook=fmt,
+                working_angle=angle,
+            )
+            if combo.signature() in seen_sigs:
+                continue
+            seen_sigs.add(combo.signature())
+            combos.append(combo)
+            if len(combos) >= count:
+                break
+
+        return combos
+
     def sample_daily_combos(
         self, count: int, exclude_signatures: Optional[set[str]] = None
     ) -> List[MatrixCombo]:
         """
-        Chọn ngẫu nhiên `count` tổ hợp (Triết gia × Bối cảnh × Cấu trúc) hoàn toàn khác nhau
-        trong ngày và tránh các tổ hợp đã dùng trong 30 ngày gần nhất.
+        Sinh `count` định hướng nội dung hoàn toàn mới và trực giao cho hôm nay:
+        - Ưu tiên AI Mở rộng Ý tưởng Tự do (OPEN_TOPIC_EXPANSION=True) để không bị gò bó danh sách cứng.
+        - Tự động bù/dự phòng từ kho gợi ý mở rộng đa lĩnh vực nếu cần.
         """
         recent_signatures = {
             f"{e.get('philosopher', '')} || {e.get('modern_context', '')} || {e.get('narrative_hook', '')}"
@@ -170,6 +260,29 @@ class DedupManager:
         if exclude_signatures:
             recent_signatures |= exclude_signatures
 
+        selected: List[MatrixCombo] = []
+
+        if getattr(config, "OPEN_TOPIC_EXPANSION", True):
+            try:
+                ai_combos = self._brainstorm_open_angles(count=count, exclude_signatures=recent_signatures)
+                for combo in ai_combos:
+                    selected.append(combo)
+                    recent_signatures.add(combo.signature())
+                if selected:
+                    logger.info(
+                        "[DEDUP T2 OPEN] AI đã tự mở rộng %d/%d định hướng chủ đề mới đa lĩnh vực.",
+                        len(selected),
+                        count,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "[DEDUP T2 OPEN FALLBACK] Brainstorm mở tạm thời lỗi (%s), dùng kho gợi ý mở rộng.",
+                    exc,
+                )
+
+        if len(selected) >= count:
+            return selected[:count]
+
         philosophers = config.PHILOSOPHERS_AND_SCHOOLS[:]
         contexts = config.MODERN_CONTEXTS[:]
         hooks = config.NARRATIVE_HOOKS[:]
@@ -177,12 +290,10 @@ class DedupManager:
         random.shuffle(contexts)
         random.shuffle(hooks)
 
-        selected: List[MatrixCombo] = []
-        used_phil_today: set[str] = set()
-        used_ctx_today: set[str] = set()
-        used_hook_today: set[str] = set()
+        used_phil_today: set[str] = {c.philosopher for c in selected}
+        used_ctx_today: set[str] = {c.modern_context for c in selected}
+        used_hook_today: set[str] = {c.narrative_hook for c in selected}
 
-        # Ưu tiên tối đa tính trực giao: không lặp triết gia, bối cảnh hoặc hook trong cùng 1 ngày
         for _ in range(300):
             if len(selected) >= count:
                 break
@@ -202,7 +313,6 @@ class DedupManager:
             used_hook_today.add(h)
             recent_signatures.add(combo.signature())
 
-        # Bổ sung linh hoạt nếu count vượt số lượng hook/triết gia
         while len(selected) < count:
             combo = MatrixCombo(
                 philosopher=random.choice(philosophers),
@@ -213,7 +323,7 @@ class DedupManager:
                 selected.append(combo)
                 recent_signatures.add(combo.signature())
 
-        logger.info("[DEDUP T2] Đã chọn %d tổ hợp ma trận trực giao cho hôm nay.", len(selected))
+        logger.info("[DEDUP T2] Đã hoàn tất %d định hướng trực giao cho hôm nay.", len(selected))
         return selected
 
     # ------------------------------------------------------------------
@@ -285,9 +395,10 @@ class DedupManager:
                 closest_entry = entry
 
         matched_title = closest_entry.get("title") if closest_entry else None
-        hard_threshold = max(0.88, float(config.SEMANTIC_SIMILARITY_THRESHOLD))
+        hard_threshold = float(config.SEMANTIC_SIMILARITY_THRESHOLD)
+        borderline_floor = max(0.72, round(hard_threshold - 0.12, 2))
 
-        # Ngưỡng cứng > 0.90 => Chắc chắn trùng lặp ngữ nghĩa gần như nguyên bản
+        # Ngưỡng cứng > SEMANTIC_SIMILARITY_THRESHOLD => Chắc chắn trùng lặp ngữ nghĩa
         if max_sim > hard_threshold:
             logger.warning(
                 "[DEDUP T3 REJECT] Độ tương đồng=%.3f (> %.2f) với video cũ '%s'.",
@@ -297,8 +408,8 @@ class DedupManager:
             )
             return True, max_sim, matched_title, candidate_embedding
 
-        # Vùng giáp ranh (0.78 - 0.90): Dùng LLM kiểm tra chéo sâu xem có trùng ý tưởng thật không
-        if max_sim >= 0.78 and closest_entry is not None:
+        # Vùng giáp ranh (borderline_floor .. hard_threshold): Dùng LLM kiểm tra chéo sâu
+        if max_sim >= borderline_floor and closest_entry is not None:
             cross_check = self._llm_overlap_crosscheck(candidate, closest_entry)
             if cross_check.get("is_duplicate", False):
                 logger.warning(
@@ -325,19 +436,24 @@ class DedupManager:
     def _llm_overlap_crosscheck(
         self, candidate: Dict[str, Any], closest_entry: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """LLM kiểm tra chéo sâu khi cosine similarity nằm ở vùng ranh giới 0.65–0.75."""
+        """LLM kiểm tra chéo sâu khi cosine similarity nằm ở vùng ranh giới."""
         prompt = (
-            "So sánh 2 ý tưởng video Stoicism sau đây và xác định chúng có bị trùng lặp "
-            "thông điệp/ý tưởng cốt lõi đối với khán giả hay không.\n\n"
+            "So sánh 2 ý tưởng video sau đây và đánh giá KHẮT KHE xem chúng có trùng lặp "
+            "thông điệp chính, vấn đề thực tế, hoặc bài học cốt lõi đối với người xem hay không.\n"
+            "(Nếu chỉ đổi tên nhân vật hoặc đổi tiêu đề nhưng bài học thực tế giống >70% thì vẫn coi là TRÙNG).\n\n"
             f"[VIDEO MỚI]\n"
             f"- Tiêu đề: {candidate.get('title')}\n"
+            f"- Lăng kính / Lĩnh vực: {candidate.get('philosopher')}\n"
+            f"- Tình huống: {candidate.get('modern_context')}\n"
             f"- Góc tiếp cận: {candidate.get('angle')}\n"
-            f"- Trích dẫn: {candidate.get('core_quote')}\n"
+            f"- Câu chốt / Trích dẫn: {candidate.get('core_quote')}\n"
             f"- Tóm tắt: {candidate.get('summary')}\n\n"
             f"[VIDEO ĐÃ SẢN XUẤT]\n"
             f"- Tiêu đề: {closest_entry.get('title')}\n"
+            f"- Lăng kính / Lĩnh vực: {closest_entry.get('philosopher')}\n"
+            f"- Tình huống: {closest_entry.get('modern_context')}\n"
             f"- Góc tiếp cận: {closest_entry.get('angle')}\n"
-            f"- Trích dẫn: {closest_entry.get('core_quote')}\n"
+            f"- Câu chốt / Trích dẫn: {closest_entry.get('core_quote')}\n"
             f"- Tóm tắt: {closest_entry.get('summary')}\n\n"
             'Trả về JSON: {"is_duplicate": true/false, "reason": "giải thích ngắn gọn 1 câu"}'
         )

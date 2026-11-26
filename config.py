@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
 
-PIPELINE_BUILD: str = "v2.9"
+PIPELINE_BUILD: str = "v3.3"
 
 # ==============================================================================
 # 1. CẤU HÌNH CÁ NHÂN (Tùy chỉnh trước khi chạy)
@@ -116,40 +116,57 @@ BACKOFF_JITTER_MAX_SECONDS: float = 3.5
 
 HISTORY_FILENAME: str = "history_log.json"
 HISTORY_RETENTION_DAYS: int = 90
-SEMANTIC_SIMILARITY_THRESHOLD: float = 0.90
+SEMANTIC_SIMILARITY_THRESHOLD: float = 0.86
+OPEN_TOPIC_EXPANSION: bool = os.getenv("OPEN_TOPIC_EXPANSION", "true").strip().lower() != "false"
 
+# Kho gợi ý mở rộng đa lĩnh vực (chỉ dùng làm nguồn cảm hứng dự phòng khi brainstorm mở gặp sự cố)
 PHILOSOPHERS_AND_SCHOOLS: List[str] = [
-    "Marcus Aurelius (Meditations — Hoàng đế & sự tự chủ nội tâm)",
-    "Seneca (Letters from a Stoic — Quản trị thời gian & nghịch cảnh)",
-    "Epictetus (Enchiridion — Nhị phân kiểm soát & tự do từ bên trong)",
-    "Musonius Rufus (Thực hành khổ hạnh hiện đại & rèn luyện thể chất)",
-    "Zeno xứ Citium (Khởi nguồn Khắc kỷ & biến mất mát thành sức mạnh)",
-    "Cato the Younger (Chính trực tuyệt đối & không khuất phục áp lực số đông)",
-    "Tâm lý học hành vi hiện đại (Cognitive Reframing kết hợp Stoicism)",
-    "Kỷ luật thép & Chủ nghĩa Tối giản tinh thần (Essentialism & Deep Focus)",
+    "Tâm lý học hành vi & Thiên kiến nhận thức (Daniel Kahneman, Amos Tversky)",
+    "Khoa học thần kinh về thói quen, sự chú ý & Dopamine (Andrew Huberman, Cal Newport)",
+    "Tâm lý học ý nghĩa & Nội lực vượt nghịch cảnh (Viktor Frankl, Carl Jung)",
+    "Kinh tế học hành vi & Tư duy ra quyết định xác suất (Charlie Munger, Nassim Taleb)",
+    "Triết học phương Đông & Nghệ thuật tĩnh tâm (Lão Tử, Thiền tông, Miyamoto Musashi)",
+    "Chiến lược & Quyền lực mềm trong lịch sử (Tôn Tử, Machiavelli, Robert Greene)",
+    "Triết lý Khắc kỷ cổ đại (Marcus Aurelius, Seneca, Epictetus)",
+    "Triết học hiện sinh & Tự kiến tạo giá trị (Nietzsche, Schopenhauer, Albert Camus)",
+    "Tư duy hệ thống & Mô hình tinh thần đa ngành (First Principles, Inversion, Second-Order Thinking)",
+    "Kỷ luật thực chiến & Chủ nghĩa Tối giản tinh thần (Essentialism, Deep Work)",
+    "Tâm lý đàm phán, thuyết phục & Ảnh hưởng xã hội (Robert Cialdini, Chris Voss)",
+    "Tiểu sử & Bước ngoặt lịch sử của những nhân vật kiệt xuất ít người biết",
+    "Tâm lý học tiến hóa & Bản năng sinh tồn trong thế giới hiện đại",
+    "Tư duy tài chính cá nhân, tự do thời gian & Lãi kép cuộc đời (Morgan Housel, Naval Ravikant)",
 ]
 
 MODERN_CONTEXTS: List[str] = [
-    "Áp lực sự nghiệp, thu nhập và cảm giác tụt hậu ở tuổi 25–40",
-    "Sự phản bội, mối quan hệ độc hại và nghệ thuật rời đi trong im lặng",
-    "Kiểm soát cơn giận, cái tôi bị tổn thương và phản ứng dưới áp lực",
-    "Cô độc chủ động, tự lập tài chính và không phụ thuộc vào sự công nhận",
-    "Vượt qua thất bại lớn, phá sản tinh thần và tái thiết từ con số không",
-    "Thói quen buổi sáng, kỷ luật sinh học và đánh bại sự trì hoãn mãn tính",
-    "Nghiện dopamine ngắn hạn, mạng xã hội và lấy lại sự tập trung sâu",
-    "Đối diện bất định kinh tế, lo âu tương lai và nghệ thuật Premeditatio Malorum",
-    "Giao tiếp ít nói nhưng có trọng lượng, thiết lập ranh giới cá nhân",
-    "Chấp nhận mất mát, vô thường và tập trung vào hành động hôm nay",
+    "Bẫy so sánh ngầm, FOMO và cách định nghĩa thước đo thành công của riêng mình",
+    "Nghệ thuật ra quyết định sáng suốt khi thiếu thông tin và áp lực thời gian cao",
+    "Tâm lý tiền bạc: Vì sao thu nhập tăng nhưng cảm giác bất an tài chính vẫn không giảm",
+    "Hội chứng kiệt sức thầm lặng (Quiet Burnout) và cách phục hồi năng lượng nhận thức",
+    "Nghệ thuật đàm phán, nói 'không' đúng lúc và bảo vệ thời gian cá nhân",
+    "Thiên kiến nhận thức khiến người thông minh vẫn lặp lại cùng một sai lầm trong công việc",
+    "Làm chủ sự tập trung sâu giữa thời đại thuật toán và thông báo liên tục",
+    "Tâm lý trong các mối quan hệ: Nhận diện thao túng cảm xúc và xây dựng kết nối lành mạnh",
+    "Cách bộ não phản ứng với sợ hãi, thất bại và cơ chế biến áp lực thành bản lĩnh",
+    "Bẫy hoàn hảo (Perfectionism) và nghệ thuật bắt đầu hành động khi chưa sẵn sàng",
+    "Xây dựng uy tín thầm lặng, giao tiếp có trọng lượng và lắng nghe chiến lược",
+    "Tư duy dài hạn: Tại sao 1% cải thiện thầm lặng mỗi ngày luôn thắng nỗ lực bộc phát",
+    "Quản trị cái tôi khi đang ở đỉnh cao lẫn khi rơi xuống đáy sự nghiệp",
+    "Nghệ thuật học nhanh, tư duy phản biện và tự nâng cấp kỹ năng giữa kỷ nguyên AI",
+    "Cô độc chủ động vs. Cô đơn tiêu cực: Rèn sức mạnh nội tâm khi bước đi một mình",
+    "Đối diện bất định kinh tế, biến động nghề nghiệp và tâm thế 'Chống mong manh' (Antifragile)",
 ]
 
 NARRATIVE_HOOKS: List[str] = [
-    "Câu chuyện lịch sử ít người biết mở đầu đầy kịch tính",
-    "Nghịch lý tâm lý ngược đời khiến người xem phải dừng lại suy ngẫm",
-    "Bài học đắt giá từ một sai lầm phổ biến mà 90% đàn ông hiện đại mắc phải",
-    "Đối chiếu sắc bén giữa một tình huống cổ đại và áp lực thế kỷ 21",
-    "Thử thách 7 ngày thực hành cụ thể từng bước thay đổi tư duy",
-    "Bóc tách một câu nói kinh điển thường bị hiểu sai hoàn toàn",
-    "Kịch bản giả định: Điều gì xảy ra nếu bạn biến mất 90 ngày để rèn mình",
+    "Phân tích một thí nghiệm tâm lý học kinh điển hé lộ sự thật bất ngờ về hành vi con người",
+    "Câu chuyện lịch sử hoặc tiểu sử thực tế ít người biết dẫn vào bài học thực chiến",
+    "Bóc tách một niềm tin phổ biến mà phần lớn mọi người đang hiểu sai hoàn toàn",
+    "Giải mã một mô hình tư duy (Mental Model) sắc bén của giới tinh hoa và cách áp dụng ngay",
+    "Phân tích chuỗi nhân quả: Một thói quen nhỏ vô hình đang âm thầm định hình 5 năm tới của bạn",
+    "Đối chiếu sắc bén giữa phản xạ bản năng thông thường và cách xử lý của người có tư duy bậc cao",
+    "Câu hỏi phản trực giác mở đầu khiến người xem phải tự soi lại chính mình",
+    "Nghiên cứu tình huống thực tế (Case Study): Từ một khoảnh khắc sai lầm đến bước ngoặt đổi đời",
+    "Bản đồ tư duy trực quan: 3 cấp độ trưởng thành tâm lý trong cùng một tình huống đời thường",
+    "Giải phẫu cơ chế hoạt động của não bộ đằng sau một thói quen khó bỏ",
 ]
 
 
@@ -169,8 +186,8 @@ TARGET_WORD_COUNT: Dict[str, Tuple[int, int]] = {
     "vi-VN": (1200, 1360),
 }
 
-CRITIC_MIN_SCORE: float = 8.0
-SCRIPT_MAX_RETRIES: int = 2
+CRITIC_MIN_SCORE: float = 7.5
+SCRIPT_MAX_RETRIES: int = 1
 VIDEO_REVIEW_MAX_RETRIES: int = 2
 
 RESOLUTION_MAP: Dict[str, Tuple[int, int]] = {

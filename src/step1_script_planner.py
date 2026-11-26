@@ -70,8 +70,8 @@ def _build_writer_system_prompt(history_digest: str) -> str:
         f"{history_digest}\n\n"
         "YÊU CẦU KỸ THUẬT KỊCH BẢN (CHUẨN VIDEO GIẢI THÍCH BẢNG TRẮNG 5 PHÚT):\n"
         f"1. Tổng độ dài lời thoại (`narration`) toàn video phải đạt {min_words}–{max_words} từ (~5 phút đọc).\n"
-        f"2. Chia thành đúng {config.SCENES_MIN} đến {config.SCENES_MAX} phân cảnh mạch lạc theo cấu trúc giải thích dễ hiểu: Hook đánh trúng vấn đề (cảnh 1–2) -> 4 Nguyên lý đánh số #1, #2, #3, #4 kèm cách áp dụng cụ thể -> Tổng kết checklist -> Cảnh cuối cùng (Câu chốt + câu hỏi mở + kêu gọi bình luận).\n"
-        "3. Phân cảnh 1–2 (15 giây đầu tiên) phải là một Hook sắc bén, đặt vấn đề trực diện, không chào hỏi sáo rỗng.\n"
+        f"2. Chia thành đúng {config.SCENES_MIN} đến {config.SCENES_MAX} phân cảnh mạch lạc, tự do chọn cấu trúc kể chuyện hấp dẫn nhất cho đề tài (ví dụ: câu chuyện mở màn -> bóc tách cơ chế tâm lý/khoa học -> ví dụ thực tế -> giải pháp ứng dụng; HOẶC phân tích thí nghiệm -> bài học phản trực giác -> lộ trình thực hành; KHÔNG bắt buộc mọi video đều lặp khuôn '4 nguyên lý #1 #2 #3 #4'). Luôn kết thúc bằng 1 cảnh tổng kết đắt giá + câu hỏi mở + lời kêu gọi bình luận.\n"
+        "3. Phân cảnh 1–2 (15 giây đầu tiên) phải là một Hook sắc bén, đặt vấn đề trực diện, không chào hỏi sáo rỗng, tránh lặp mô-típ tiêu đề nhàm chán.\n"
         f"4. CHIA NHIỀU ẢNH DÀY THEO TỪNG CỤM Ý (3–4 ẢNH / CẢNH = ~72–96 ẢNH CHO 5 PHÚT, ~3–4 GIÂY/ẢNH): Mỗi phân cảnh BẮT BUỘC có mảng `visual_beats` gồm ĐÚNG {config.BEATS_PER_SCENE_MIN} đến {config.BEATS_PER_SCENE_MAX} phần tử ứng với từng cụm từ/ý tưởng trong câu thoại `narration` (ví dụ câu 'khi bị chê bai, thay vì đau khổ, hãy coi đó là luồng gió thổi qua hòn đá tảng tâm trí vững vàng' -> tách thành 4 ảnh: 1. Bị chê bai, 2. Đau khổ bị gạch bỏ, 3. Gió thổi qua tảng đá, 4. Tâm trí vững vàng). Mỗi `visual_beats[i].image_prompt` mô tả DUY NHẤT 1 chủ thể/ẩn dụ trực quan tối giản trên nền {config.WHITEBOARD_BG_COLOR}, nét {config.WHITEBOARD_INK_COLOR}, nhấn {config.WHITEBOARD_ACCENT_COLOR}. TUYỆT ĐỐI KHÔNG vẽ chữ/ký tự bên trong tranh, KHÔNG bàn tay chi tiết hay đám đông rối, KHÔNG dùng từ bạo lực/máu me/vũ khí.\n"
         "5. `quote_overlay`: Từ khóa hoặc câu chốt ngắn tối đa 9 từ (để rỗng `\"\"` ở những cảnh không cần chữ).\n"
         "6. `motion_type`: Chỉ chọn 1 trong 4 giá trị: `zoom_in`, `zoom_out`, `pan_left`, `pan_right` (luân phiên mượt mà).\n"
@@ -95,16 +95,16 @@ def _build_writer_user_prompt(
 
     return (
         f"Hãy lên ý tưởng và viết kịch bản hoàn chỉnh cho VIDEO #{video_slot + 1} hôm nay.\n\n"
-        "[TỔ HỢP MA TRẬN BẮT BUỘC]\n"
+        "[ĐỊNH HƯỚNG Ý TƯỞNG MỞ — TỰ DO SÁNG TẠO KHÔNG RẬP KHUÔN]\n"
         f"{combo.to_prompt_block()}\n"
         f"{feedback_section}\n\n"
         "Trả về duy nhất 1 JSON object đúng schema sau:\n"
         "{\n"
-        '  "title": "Tiêu đề cuốn hút, sắc bén, không giật tít rẻ tiền",\n'
+        '  "title": "Tiêu đề cuốn hút, sắc bén, mới mẻ, không lặp công thức cũ",\n'
         '  "thumbnail_hook": "Câu chốt ngắn 3-6 từ cực thu hút đặt lên Thumbnail YouTube",\n'
         '  "thumbnail_prompt": "English visual description for a bold high-CTR YouTube thumbnail illustration matching the channel palette",\n'
         '  "angle": "Góc tiếp cận cốt lõi (1 câu ngắn)",\n'
-        '  "core_quote": "Câu trích dẫn Khắc kỷ trọng tâm của video",\n'
+        '  "core_quote": "Câu trích dẫn hoặc tư tưởng đinh trọng tâm của video",\n'
         '  "summary": "Tóm tắt nội dung cốt lõi trong đúng 1 câu súc tích",\n'
         '  "scenes": [\n'
         "    {\n"
@@ -138,10 +138,10 @@ def _evaluate_script_with_critic(
     scene_count = len(script.get("scenes", []))
 
     prompt = (
-        "Đánh giá nghiêm khắc kịch bản video Stoicism sau đây trên thang điểm 0.0 đến 10.0.\n\n"
+        f"Đánh giá nghiêm khắc kịch bản video thuộc định hướng '{config.CHANNEL_TOPIC}' trên thang điểm 0.0 đến 10.0.\n\n"
         f"- Tiêu đề: {script.get('title')}\n"
         f"- Góc tiếp cận: {script.get('angle')}\n"
-        f"- Trích dẫn cốt lõi: {script.get('core_quote')}\n"
+        f"- Trích dẫn / Tư tưởng cốt lõi: {script.get('core_quote')}\n"
         f"- Tóm tắt: {script.get('summary')}\n"
         f"- Tổng số cảnh: {scene_count} | Tổng số từ: {total_words}\n"
         f"- Hook 15 giây đầu: {first_two_narration}\n"
@@ -150,8 +150,8 @@ def _evaluate_script_with_critic(
         f"{history_digest[:4000]}\n\n"
         "TIÊU CHÍ CHẤM ĐIỂM (MỖI TIÊU CHÍ TỐI ĐA 2.5 ĐIỂM):\n"
         "1. hook_score: 15s đầu có sắc bén, kéo người xem vào vấn đề ngay lập tức không?\n"
-        "2. depth_score: Chiều sâu triết lý Khắc kỷ có thực tế, không rao giảng giáo điều sáo rỗng?\n"
-        "3. novelty_score: Góc tiếp cận có thật sự mới so với lịch sử không?\n"
+        "2. depth_score: Chiều sâu phân tích (tâm lý, triết lý, ví dụ thực tế) có sắc sảo, không rao giảng sáo rỗng?\n"
+        "3. novelty_score: Đề tài & góc nhìn có thật sự mới mẻ, khác biệt so với lịch sử 90 ngày không?\n"
         "4. visual_variety_score: Các image_prompt có đa dạng bố cục giữa các cảnh không?\n\n"
         "Trả về JSON đúng định dạng:\n"
         "{\n"
@@ -161,15 +161,15 @@ def _evaluate_script_with_critic(
         '  "visual_variety_score": 2.0,\n'
         '  "total_score": 8.6,\n'
         '  "is_cliche_or_repetitive": false,\n'
-        '  "critique_feedback": "Nhận xét cụ thể điểm cần sửa nếu tổng điểm < 8.0"\n'
+        '  "critique_feedback": "Nhận xét cụ thể điểm cần sửa nếu tổng điểm chưa đạt"\n'
         "}"
     )
 
     return vertex.generate_json(
         prompt=prompt,
         system_instruction=(
-            "Bạn là Giám đốc Sáng tạo (Creative Director) cực kỳ khó tính của một kênh YouTube "
-            "Triết lý Khắc kỷ triệu người đăng ký. Chỉ cho >= 8.0 khi kịch bản thực sự sắc sảo."
+            "Bạn là Giám đốc Sáng tạo (Creative Director) khó tính của một kênh YouTube triệu người đăng ký. "
+            "Đánh giá công tâm theo độ sắc sảo, chiều sâu thực tế và tính mới lạ so với lịch sử."
         ),
         temperature=0.2,
         task_name="ai_critic_review",
