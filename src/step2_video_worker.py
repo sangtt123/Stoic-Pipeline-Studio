@@ -36,6 +36,10 @@ from src.studio_art_engine import (
     render_studio_thumbnail_svg,
     resolve_studio_theme,
 )
+from src.studio_motion_renderer import (
+    build_motion_theme_style,
+    render_motion_beat_scene_clip,
+)
 from src.tts_generator import TTSGenerator
 from src.vertex_client import VertexAIClient
 from src.video_renderer import (
@@ -132,6 +136,9 @@ def _produce_scene_assets(
     tts: TTSGenerator,
     vertex: VertexAIClient,
     regenerate_visual_only: bool = False,
+    beat_global_offset: int = 0,
+    elapsed_offset_sec: float = 0.0,
+    prev_beat_svg: str | None = None,
 ) -> tuple[Path, float]:
     """Tạo tài nguyên (TTS + Imagen 2D + Pillow Overlay) và render clip cho 1 phân cảnh."""
     audio_stem = scene_dir / f"scene_{scene_idx:02d}"
@@ -163,11 +170,13 @@ def _produce_scene_assets(
     active_beats = raw_beats[:4]
 
     beat_images: List[Path] = []
+    beat_svgs: List[str | None] = []
+    beat_phrases: List[str] = []
     beat_weights: List[float] = []
     use_studio_vector = getattr(config, "VIDEO_VISUAL_MODE", "") == "stickman_whiteboard"
+    studio_theme = resolve_studio_theme() if use_studio_vector else None
 
-    if use_studio_vector:
-        studio_theme = resolve_studio_theme()
+    if use_studio_vector and studio_theme is not None:
         variation_shift = 1 if regenerate_visual_only else 0
         blueprints = vertex.direct_studio_scene_beats(
             narration=scene.get("narration", ""),
@@ -180,14 +189,15 @@ def _produce_scene_assets(
             beat_img_path = (
                 image_path if b_idx == 0 else scene_dir / f"scene_{scene_idx:02d}_beat_{b_idx:02d}_art.png"
             )
+            generated_svg: str | None = None
             try:
-                svg_markup = render_studio_shot_svg(
+                generated_svg = render_studio_shot_svg(
                     blueprint=bp,
                     theme=studio_theme,
                     aspect_ratio=config.ASPECT_RATIO,
                 )
                 rasterize_svg_to_png(
-                    svg_markup=svg_markup,
+                    svg_markup=generated_svg,
                     output_path=beat_img_path,
                     width=resolution[0],
                     height=resolution[1],
@@ -199,10 +209,14 @@ def _produce_scene_assets(
                     b_idx + 1,
                     svg_err,
                 )
+                generated_svg = None
                 _render_fallback_scene_art(beat_img_path, resolution)
 
             beat_images.append(beat_img_path)
-            phrase_words = max(3, len(str(beat.get("phrase") or "").split()))
+            beat_svgs.append(generated_svg)
+            phrase_str = str(beat.get("phrase") or scene.get("narration") or "").strip()
+            beat_phrases.append(phrase_str)
+            phrase_words = max(3, len(phrase_str.split()))
             beat_weights.append(float(phrase_words))
 
         # Nghỉ nhẹ giữa các phân cảnh (chỉ 1 LLM call/cảnh nên rất nhẹ RPM)
@@ -238,7 +252,10 @@ def _produce_scene_assets(
                 _render_fallback_scene_art(beat_img_path, resolution)
 
             beat_images.append(beat_img_path)
-            phrase_words = max(3, len(str(beat.get("phrase") or "").split()))
+            beat_svgs.append(None)
+            phrase_str = str(beat.get("phrase") or scene.get("narration") or "").strip()
+            beat_phrases.append(phrase_str)
+            phrase_words = max(3, len(phrase_str.split()))
             beat_weights.append(float(phrase_words))
 
             # Nhịp nghỉ nhẹ giữa các ảnh liên tiếp để không dồn RPM gây lỗi 429
@@ -254,11 +271,45 @@ def _produce_scene_assets(
     scale_factor = duration_sec / max(0.1, sum(beat_durations))
     beat_durations = [round(d * scale_factor, 3) for d in beat_durations]
 
-    # 3. Vẽ lớp phủ 2D trong suốt bằng Pillow (viền, thanh tiến trình, trích dẫn, hạt phim)
-    quote_text = scene.get("quote_overlay", "")
-    # Nếu lần retry trước nghi ngờ lỗi chữ tràn -> rút gọn an toàn trích dẫn
-    if regenerate_visual_only and len(quote_text.split()) > 10:
-        quote_text = " ".join(quote_text.split()[:10])
+    scene["_beat_count"] = len(beat_images)
+    scene["_last_beat_svg"] = beat_svgs[-1] if beat_svgs else None
+    scene["_beat_global_offset"] = beat_global_offset
+    scene["_elapsed_offset_sec"] = elapsed_offset_sec
+
+    # 3. Nếu là chế độ Studio Vector (`stickman_whiteboard`): chạy bộ Motion Graphics đa lớp 30fps 1:1 với Local
+    if use_studio_vector and any(svg is not None for svg in beat_svgs):
+        try:
+            motion_theme = build_motion_theme_style(
+                bg_color=studio_theme.bg_color if studio_theme else None,
+                ink_color=studio_theme.ink_color if studio_theme else None,
+                accent_color=studio_theme.accent_color if studio_theme else None,
+            )
+            render_motion_beat_scene_clip(
+                beat_svgs=beat_svgs,
+                beat_durations=beat_durations,
+                audio_path=audio_path,
+                output_clip_path=clip_path,
+                resolution=resolution,
+                scene_index=scene_idx,
+                total_scenes=total_scenes,
+                beat_global_offset=beat_global_offset,
+                elapsed_offset_sec=elapsed_offset_sec,
+                prev_beat_svg=prev_beat_svg,
+                cached_full_pngs=beat_images,
+                theme=motion_theme,
+                beat_phrases=beat_phrases,
+            )
+            return clip_path, duration_sec
+        except Exception as motion_err:
+            logger.warning(
+                "[STUDIO MOTION FALLBACK] Cảnh %d motion graphics gặp lỗi (%s) -> chuyển về FFmpeg zoom/fade dự phòng.",
+                scene_idx + 1,
+                motion_err,
+            )
+
+    # 4. Vẽ lớp phủ 2D trong suốt bằng Pillow cho chế độ ken_burns_2d / pen_sketch / dự phòng
+    scene_narration = str(scene.get("narration") or "").strip()
+    quote_text = "" if scene_narration else str(scene.get("quote_overlay", "")).strip()
 
     render_scene_overlay(
         output_path=overlay_path,
@@ -268,7 +319,7 @@ def _produce_scene_assets(
         quote_overlay=quote_text,
     )
 
-    # 4. Render clip phân cảnh nối 3–4 ảnh con trên cùng 1 giọng đọc liên mạch (khớp 100% duration)
+    # 5. Render clip phân cảnh nối 3–4 ảnh con trên cùng 1 giọng đọc liên mạch (khớp 100% duration)
     if len(beat_images) > 1 and config.VIDEO_VISUAL_MODE != "pen_sketch":
         render_multi_beat_scene_clip(
             beat_images=beat_images,
@@ -278,6 +329,7 @@ def _produce_scene_assets(
             output_clip_path=clip_path,
             motion_type=scene.get("motion_type", "zoom_in"),
             resolution=resolution,
+            narration_text=scene_narration,
         )
     else:
         render_scene_clip(
@@ -288,6 +340,7 @@ def _produce_scene_assets(
             duration_sec=duration_sec,
             motion_type=scene.get("motion_type", "zoom_in"),
             resolution=resolution,
+            narration_text=scene_narration,
         )
     return clip_path, duration_sec
 
@@ -323,7 +376,7 @@ def run_worker(video_index: int) -> None:
 
     logger.info(
         "[PIPELINE BUILD %s] ========== BẮT ĐẦU SẢN XUẤT VIDEO #%d: '%s' (%d cảnh | %s) ==========",
-        getattr(config, "PIPELINE_BUILD", "v3.7"),
+        getattr(config, "PIPELINE_BUILD", "v3.10"),
         video_index,
         script["title"],
         len(scenes),
@@ -347,9 +400,12 @@ def run_worker(video_index: int) -> None:
         thumbnail_art_path = workdir / "thumbnail_art.png"
         final_thumbnail_png = workdir / f"{folder_number}_thumbnail.png"
 
-        # Vòng đầu tiên: sản xuất toàn bộ phân cảnh
+        # Vòng đầu tiên: sản xuất toàn bộ phân cảnh (truyền beat offset & đồng hồ liên tục xuyên suốt)
+        running_beat_offset = 0
+        running_elapsed_sec = 0.0
+        prev_scene_last_svg: str | None = None
         for idx, scene in enumerate(scenes):
-            clip_path, _ = _produce_scene_assets(
+            clip_path, scene_dur = _produce_scene_assets(
                 scene=scene,
                 scene_idx=idx,
                 total_scenes=len(scenes),
@@ -358,8 +414,14 @@ def run_worker(video_index: int) -> None:
                 tts=tts,
                 vertex=vertex,
                 regenerate_visual_only=False,
+                beat_global_offset=running_beat_offset,
+                elapsed_offset_sec=running_elapsed_sec,
+                prev_beat_svg=prev_scene_last_svg,
             )
             scene_clips.append(clip_path)
+            running_beat_offset += int(scene.get("_beat_count", 1))
+            running_elapsed_sec += float(scene_dur) + 0.35
+            prev_scene_last_svg = scene.get("_last_beat_svg")
 
         concatenate_and_mix_bgm(scene_clips, final_local_mp4, bgm_path=bgm_path)
 
@@ -396,6 +458,9 @@ def run_worker(video_index: int) -> None:
 
             regen_audio = len(qa.technical_issues) > 0
             for scene_idx in sorted(bad_zero_based):
+                retry_prev_svg = (
+                    scenes[scene_idx - 1].get("_last_beat_svg") if scene_idx > 0 else None
+                )
                 new_clip, _ = _produce_scene_assets(
                     scene=scenes[scene_idx],
                     scene_idx=scene_idx,
@@ -405,6 +470,9 @@ def run_worker(video_index: int) -> None:
                     tts=tts,
                     vertex=vertex,
                     regenerate_visual_only=not regen_audio,
+                    beat_global_offset=int(scenes[scene_idx].get("_beat_global_offset", scene_idx * 4)),
+                    elapsed_offset_sec=float(scenes[scene_idx].get("_elapsed_offset_sec", scene_idx * 12.0)),
+                    prev_beat_svg=retry_prev_svg,
                 )
                 scene_clips[scene_idx] = new_clip
 

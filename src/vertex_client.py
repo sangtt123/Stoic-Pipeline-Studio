@@ -35,6 +35,7 @@ from src.studio_art_engine import (
     STUDIO_PROPS,
     StudioShotBlueprint,
     normalize_studio_blueprint,
+    resolve_studio_character_style,
 )
 
 logger = logging.getLogger("vertex_client")
@@ -938,6 +939,7 @@ class VertexAIClient:
         results: List[StudioShotBlueprint] = []
         total_beats = len(active_beats)
 
+        char_style = resolve_studio_character_style()
         for idx, beat in enumerate(active_beats):
             beat_id = int(beat.get("beat_id") or (idx + 1))
             candidate = next(
@@ -953,6 +955,7 @@ class VertexAIClient:
                 chapter_header=None,
                 beat_index=idx,
                 total_beats=total_beats,
+                character_style=char_style,
             )
             if bp.composition in used_compositions and bp.primary_prop in used_props:
                 alt_comp = next((c for c in STUDIO_COMPOSITIONS if c not in used_compositions), None)
@@ -1009,6 +1012,7 @@ class VertexAIClient:
             phrase=title,
             short_label=hook,
             image_prompt=prompt_hint or title,
+            character_style=resolve_studio_character_style(),
         )
         if bp.overlay_effect == "none":
             bp.overlay_effect = "spark_emphasis"

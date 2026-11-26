@@ -206,6 +206,7 @@ def render_pen_sketch_scene(
     output_clip_path: Path,
     duration_sec: float,
     resolution: Tuple[int, int],
+    narration_text: str = "",
 ) -> Path:
     """
     Render 1 phân cảnh hoàn chỉnh dạng "Cây bút chuyển động vẽ nét -> đổ bóng hiện hình".
@@ -242,6 +243,12 @@ def render_pen_sketch_scene(
     # Chuẩn bị bảng vẽ tích lũy (incremental sketch canvas)
     sketch_canvas = paper_bgr.copy()
     last_tip = (width // 2, height // 2)
+
+    sub_tracker = None
+    if narration_text and narration_text.strip():
+        from src.studio_motion_renderer import BoxProgressiveSubtitleTracker
+
+        sub_tracker = BoxProgressiveSubtitleTracker(narration_text, width, height)
 
     # Mở tiến trình FFmpeg nhận luồng video raw BGR24 qua stdin và ghép trực tiếp audio TTS
     output_clip_path.parent.mkdir(parents=True, exist_ok=True)
@@ -355,8 +362,10 @@ def render_pen_sketch_scene(
                 # Giai đoạn 3: Khung hình hoàn chỉnh sắc nét
                 frame = target_bgr.copy()
 
-            # Ghép lớp phủ 2D Pillow (viền, chữ trích dẫn, thanh tiến trình) lên trên cùng
+            # Ghép lớp phủ 2D Pillow (viền, thanh tiến trình) + phụ đề chạy từng từ theo giọng đọc
             _alpha_blit(frame, overlay_rgba, 0, 0)
+            if sub_tracker is not None:
+                sub_tracker.draw(frame, frame_idx / max(1, total_frames - 1))
             proc.stdin.write(frame.tobytes())
 
         proc.stdin.close()

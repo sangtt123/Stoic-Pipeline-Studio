@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
 
-PIPELINE_BUILD: str = "v3.7"
+PIPELINE_BUILD: str = "v3.10"
 
 # ==============================================================================
 # 1. CẤU HÌNH CÁ NHÂN (Tùy chỉnh trước khi chạy)
@@ -35,6 +35,7 @@ VISUAL_STYLE_PROMPT: str = (
 # - "ken_burns_2d": Ảnh 2D tĩnh kết hợp chuyển động máy quay zoom/pan mượt
 # - "pen_sketch": Cây bút chuyển động vẽ nét phác họa rồi đổ bóng hiện hình
 VIDEO_VISUAL_MODE: str = os.getenv("VIDEO_VISUAL_MODE", "stickman_whiteboard")
+STUDIO_CHARACTER_STYLE: str = os.getenv("STUDIO_CHARACTER_STYLE", "owl_philosopher")
 VIDEO_PLAYBACK_SPEED: float = float(os.getenv("VIDEO_PLAYBACK_SPEED", "1.25"))
 WHITEBOARD_BG_COLOR: str = os.getenv("WHITEBOARD_BG_COLOR", "#EEF2F7")
 WHITEBOARD_INK_COLOR: str = os.getenv("WHITEBOARD_INK_COLOR", "#0F172A")

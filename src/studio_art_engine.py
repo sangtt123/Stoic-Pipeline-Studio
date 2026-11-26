@@ -114,6 +114,16 @@ STUDIO_OVERLAYS: Tuple[str, ...] = (
     "spark_emphasis",
 )
 
+STUDIO_CHARACTER_STYLES: Tuple[str, ...] = (
+    "owl_philosopher",
+    "cat_stoic",
+    "fox_strategist",
+    "shiba_sensei",
+    "stickman",
+)
+
+DEFAULT_STUDIO_CHARACTER_STYLE: str = "owl_philosopher"
+
 FONT_FAMILY = "'DejaVu Sans', 'Noto Sans', 'Segoe UI', Arial, sans-serif"
 
 
@@ -133,6 +143,7 @@ class StudioShotBlueprint:
     primary_prop: str
     overlay_effect: str
     caption: str
+    character_style: str = DEFAULT_STUDIO_CHARACTER_STYLE
     secondary_pose: Optional[str] = None
     secondary_expression: Optional[str] = None
     secondary_prop: Optional[str] = None
@@ -143,6 +154,16 @@ class StudioShotBlueprint:
     step_items: Optional[List[str]] = None
     beat_index: Optional[int] = None
     total_beats: Optional[int] = None
+
+
+def resolve_studio_character_style(override: Optional[str] = None) -> str:
+    """Lấy phong cách nhân vật 2D từ tham số hoặc config.STUDIO_CHARACTER_STYLE."""
+    candidate = override if override else getattr(config, "STUDIO_CHARACTER_STYLE", DEFAULT_STUDIO_CHARACTER_STYLE)
+    if isinstance(candidate, str):
+        norm = candidate.strip().lower()
+        if norm in STUDIO_CHARACTER_STYLES:
+            return norm
+    return DEFAULT_STUDIO_CHARACTER_STYLE
 
 
 def resolve_studio_theme() -> StudioThemeColors:
@@ -226,13 +247,16 @@ def infer_semantic_blueprint(
     layout_type: Optional[str] = None,
     beat_index: Optional[int] = None,
     total_beats: Optional[int] = None,
+    character_style: Optional[str] = None,
 ) -> StudioShotBlueprint:
     """Bộ phân tích ngữ nghĩa tiếng Việt & tiếng Anh dự phòng thông minh."""
     text = f"{phrase} {short_label} {image_prompt}".lower()
     idx = beat_index or 0
+    resolved_style = resolve_studio_character_style(character_style)
 
     def _make(**kwargs: Any) -> StudioShotBlueprint:
         return StudioShotBlueprint(
+            character_style=resolved_style,
             sub_phrase=phrase,
             chapter_header=chapter_header,
             beat_index=beat_index,
@@ -427,8 +451,12 @@ def normalize_studio_blueprint(
     layout_type: Optional[str] = None,
     beat_index: Optional[int] = None,
     total_beats: Optional[int] = None,
+    character_style: Optional[str] = None,
 ) -> StudioShotBlueprint:
     """Chuẩn hóa JSON từ AI Art Director thành blueprint hợp lệ 100%."""
+    resolved_style = resolve_studio_character_style(
+        character_style or (raw.get("character_style") if isinstance(raw, dict) else None)
+    )
     inferred = infer_semantic_blueprint(
         phrase=phrase,
         short_label=short_label,
@@ -437,6 +465,7 @@ def normalize_studio_blueprint(
         layout_type=layout_type,
         beat_index=beat_index,
         total_beats=total_beats,
+        character_style=resolved_style,
     )
     if not raw or not isinstance(raw, dict):
         return inferred
@@ -472,6 +501,7 @@ def normalize_studio_blueprint(
         composition=_pick_enum(raw.get("composition"), STUDIO_COMPOSITIONS, inferred.composition),
         character_pose=_pick_enum(raw.get("character_pose"), STUDIO_POSES, inferred.character_pose),
         character_expression=_pick_enum(raw.get("character_expression"), STUDIO_EXPRESSIONS, inferred.character_expression),
+        character_style=resolved_style,
         secondary_pose=(
             _pick_enum(raw.get("secondary_pose"), STUDIO_POSES, inferred.secondary_pose or "pointing_accuse")
             if raw.get("secondary_pose")
@@ -498,6 +528,226 @@ def normalize_studio_blueprint(
         beat_index=beat_index,
         total_beats=total_beats,
     )
+
+
+def _render_eye_brows_and_pupils(
+    expression: str,
+    ink: str,
+    accent: str,
+    surface: str,
+    eye_y: int = -80,
+) -> str:
+    if expression == "angry":
+        return f"""
+        <path d="M-26 {eye_y - 14} L-7 {eye_y - 6} M26 {eye_y - 14} L7 {eye_y - 6}" stroke="{ink}" stroke-width="4.4" stroke-linecap="round"/>
+        <circle cx="-15" cy="{eye_y}" r="4.6" fill="{ink}"/>
+        <circle cx="15" cy="{eye_y}" r="4.6" fill="{ink}"/>
+        <path d="M28 {eye_y - 32} L37 {eye_y - 23} M37 {eye_y - 32} L28 {eye_y - 23}" stroke="{accent}" stroke-width="3.2" stroke-linecap="round"/>
+        """
+    if expression in ("sad", "hurt"):
+        return f"""
+        <path d="M-25 {eye_y - 9} Q-16 {eye_y - 15} -7 {eye_y - 10} M25 {eye_y - 9} Q16 {eye_y - 15} 7 {eye_y - 10}" fill="none" stroke="{ink}" stroke-width="3.6" stroke-linecap="round"/>
+        <circle cx="-15" cy="{eye_y}" r="4.2" fill="{ink}"/>
+        <circle cx="15" cy="{eye_y}" r="4.2" fill="{ink}"/>
+        <path d="M-21 {eye_y + 10} Q-25 {eye_y + 20} -20 {eye_y + 24} Q-15 {eye_y + 20} -21 {eye_y + 10} Z" fill="{accent}" fill-opacity="0.82"/>
+        """
+    if expression == "stressed":
+        return f"""
+        <path d="M-24 {eye_y - 14} L-8 {eye_y - 9} M24 {eye_y - 14} L8 {eye_y - 9}" stroke="{ink}" stroke-width="3.8" stroke-linecap="round"/>
+        <circle cx="-15" cy="{eye_y}" r="5.2" fill="{surface}" stroke="{ink}" stroke-width="3.2"/>
+        <circle cx="-15" cy="{eye_y}" r="2.1" fill="{ink}"/>
+        <circle cx="15" cy="{eye_y}" r="5.2" fill="{surface}" stroke="{ink}" stroke-width="3.2"/>
+        <circle cx="15" cy="{eye_y}" r="2.1" fill="{ink}"/>
+        <path d="M34 {eye_y - 16} Q40 {eye_y - 5} 34 {eye_y + 1} Q28 {eye_y - 5} 34 {eye_y - 16} Z" fill="{accent}"/>
+        """
+    if expression == "shocked":
+        return f"""
+        <path d="M-24 {eye_y - 16} Q-15 {eye_y - 23} -7 {eye_y - 16} M7 {eye_y - 16} Q15 {eye_y - 23} 24 {eye_y - 16}" fill="none" stroke="{ink}" stroke-width="3.5" stroke-linecap="round"/>
+        <circle cx="-15" cy="{eye_y}" r="6" fill="{surface}" stroke="{ink}" stroke-width="3.2"/>
+        <circle cx="-15" cy="{eye_y}" r="2.2" fill="{ink}"/>
+        <circle cx="15" cy="{eye_y}" r="6" fill="{surface}" stroke="{ink}" stroke-width="3.2"/>
+        <circle cx="15" cy="{eye_y}" r="2.2" fill="{ink}"/>
+        """
+    if expression == "peaceful":
+        return f"""
+        <path d="M-23 {eye_y} Q-15 {eye_y + 6} -7 {eye_y} M7 {eye_y} Q15 {eye_y + 6} 23 {eye_y}" fill="none" stroke="{ink}" stroke-width="4" stroke-linecap="round"/>
+        """
+    if expression == "thinking":
+        return f"""
+        <path d="M-24 {eye_y - 12} Q-15 {eye_y - 18} -7 {eye_y - 12} M8 {eye_y - 14} L24 {eye_y - 11}" fill="none" stroke="{ink}" stroke-width="3.5" stroke-linecap="round"/>
+        <circle cx="-14" cy="{eye_y}" r="4.3" fill="{ink}"/>
+        <circle cx="16" cy="{eye_y}" r="4.3" fill="{ink}"/>
+        """
+    if expression == "determined":
+        return f"""
+        <path d="M-25 {eye_y - 12} L-7 {eye_y - 8} M25 {eye_y - 12} L7 {eye_y - 8}" stroke="{ink}" stroke-width="4.2" stroke-linecap="round"/>
+        <circle cx="-15" cy="{eye_y}" r="4.6" fill="{ink}"/>
+        <circle cx="15" cy="{eye_y}" r="4.6" fill="{ink}"/>
+        """
+    if expression == "confident":
+        return f"""
+        <path d="M-23 {eye_y - 13} Q-15 {eye_y - 18} -7 {eye_y - 13} M7 {eye_y - 13} Q15 {eye_y - 18} 23 {eye_y - 13}" fill="none" stroke="{ink}" stroke-width="3.6" stroke-linecap="round"/>
+        <circle cx="-15" cy="{eye_y}" r="4.8" fill="{ink}"/>
+        <circle cx="-13.5" cy="{eye_y - 1.5}" r="1.4" fill="{surface}"/>
+        <circle cx="15" cy="{eye_y}" r="4.8" fill="{ink}"/>
+        <circle cx="16.5" cy="{eye_y - 1.5}" r="1.4" fill="{surface}"/>
+        """
+    return f"""
+    <circle cx="-15" cy="{eye_y}" r="4.6" fill="{ink}"/>
+    <circle cx="-13.5" cy="{eye_y - 1.5}" r="1.4" fill="{surface}"/>
+    <circle cx="15" cy="{eye_y}" r="4.6" fill="{ink}"/>
+    <circle cx="16.5" cy="{eye_y - 1.5}" r="1.4" fill="{surface}"/>
+    """
+
+
+def _render_animal_mouth(expression: str, ink: str, accent: str, mouth_y: int = -52) -> str:
+    if expression == "angry":
+        return f'<path d="M-13 {mouth_y + 4} Q0 {mouth_y - 7} 13 {mouth_y + 4}" fill="{accent}" fill-opacity="0.22" stroke="{ink}" stroke-width="3.6" stroke-linecap="round"/>'
+    if expression in ("sad", "hurt"):
+        return f'<path d="M-12 {mouth_y + 5} Q0 {mouth_y - 5} 12 {mouth_y + 5}" fill="none" stroke="{ink}" stroke-width="3.6" stroke-linecap="round"/>'
+    if expression == "stressed":
+        return f'<path d="M-13 {mouth_y + 2} Q-6 {mouth_y - 3} 0 {mouth_y + 2} Q6 {mouth_y + 7} 13 {mouth_y + 2}" fill="none" stroke="{ink}" stroke-width="3.6" stroke-linecap="round"/>'
+    if expression == "shocked":
+        return f'<ellipse cx="0" cy="{mouth_y + 2}" rx="7.5" ry="9" fill="{accent}" fill-opacity="0.22" stroke="{ink}" stroke-width="3.5"/>'
+    if expression == "determined":
+        return f'<line x1="-11" y1="{mouth_y + 1}" x2="11" y2="{mouth_y + 1}" stroke="{ink}" stroke-width="3.8" stroke-linecap="round"/>'
+    if expression == "thinking":
+        return f'<path d="M-8 {mouth_y + 2} Q2 {mouth_y + 4} 11 {mouth_y - 2}" fill="none" stroke="{ink}" stroke-width="3.6" stroke-linecap="round"/>'
+    return f'<path d="M-12 {mouth_y} Q-6 {mouth_y + 7} 0 {mouth_y + 1} Q6 {mouth_y + 7} 12 {mouth_y}" fill="none" stroke="{ink}" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/>'
+
+
+def _render_mascot_head_and_face(
+    character_style: str,
+    expression: str,
+    ink: str,
+    accent: str,
+    surface: str,
+) -> str:
+    if character_style == "owl_philosopher":
+        eyes_svg = _render_eye_brows_and_pupils(expression, ink, accent, surface, -80)
+        glasses_svg = (
+            f"""
+            <circle cx="-16" cy="-80" r="13.5" fill="none" stroke="{ink}" stroke-width="2.6" stroke-opacity="0.88"/>
+            <circle cx="16" cy="-80" r="13.5" fill="none" stroke="{ink}" stroke-width="2.6" stroke-opacity="0.88"/>
+            <line x1="-2.5" y1="-80" x2="2.5" y2="-80" stroke="{ink}" stroke-width="2.6"/>
+            <line x1="-29.5" y1="-80" x2="-43" y2="-83" stroke="{ink}" stroke-width="2.4"/>
+            <line x1="29.5" y1="-80" x2="43" y2="-83" stroke="{ink}" stroke-width="2.4"/>
+            """
+            if expression != "shocked"
+            else ""
+        )
+        if expression == "shocked":
+            beak_svg = (
+                f'<polygon points="-7,-68 7,-68 0,-55" fill="{accent}" stroke="{ink}" stroke-width="3.2" stroke-linejoin="round"/>'
+                f'<ellipse cx="0" cy="-55" rx="6" ry="7" fill="{accent}" fill-opacity="0.28" stroke="{ink}" stroke-width="3.2"/>'
+            )
+        elif expression == "angry":
+            beak_svg = (
+                f'<polygon points="-8,-68 8,-68 0,-54" fill="{accent}" stroke="{ink}" stroke-width="3.4" stroke-linejoin="round"/>'
+                f'<line x1="-8" y1="-63" x2="8" y2="-63" stroke="{ink}" stroke-width="2.4" stroke-linecap="round"/>'
+            )
+        else:
+            beak_svg = f'<polygon points="-7.5,-68 7.5,-68 0,-54" fill="{accent}" stroke="{ink}" stroke-width="3.2" stroke-linejoin="round"/>'
+
+        return f"""
+        <polygon points="-32,-106 -44,-138 -12,-116" fill="{surface}" stroke="{ink}" stroke-width="4.8" stroke-linejoin="round"/>
+        <polygon points="32,-106 44,-138 12,-116" fill="{surface}" stroke="{ink}" stroke-width="4.8" stroke-linejoin="round"/>
+        <polygon points="-28,-110 -37,-129 -17,-115" fill="{accent}" fill-opacity="0.32"/>
+        <polygon points="28,-110 37,-129 17,-115" fill="{accent}" fill-opacity="0.32"/>
+        <ellipse cx="0" cy="-76" rx="47" ry="43" fill="{surface}" stroke="{ink}" stroke-width="5.2"/>
+        <path d="M-36 -84 Q-20 -106 0 -89 Q20 -106 36 -84 Q38 -49 0 -43 Q-38 -49 -36 -84 Z" fill="{ink}" fill-opacity="0.06" stroke="{ink}" stroke-width="2.4" stroke-opacity="0.35"/>
+        {glasses_svg}
+        {eyes_svg}
+        {beak_svg}
+        """
+
+    if character_style == "cat_stoic":
+        return f"""
+        <polygon points="-39,-94 -36,-138 -9,-112" fill="{surface}" stroke="{ink}" stroke-width="5" stroke-linejoin="round"/>
+        <polygon points="39,-94 36,-138 9,-112" fill="{surface}" stroke="{ink}" stroke-width="5" stroke-linejoin="round"/>
+        <polygon points="-33,-100 -31,-127 -15,-111" fill="{accent}" fill-opacity="0.28"/>
+        <polygon points="33,-100 31,-127 15,-111" fill="{accent}" fill-opacity="0.28"/>
+        <ellipse cx="0" cy="-74" rx="47" ry="42" fill="{surface}" stroke="{ink}" stroke-width="5.2"/>
+        <path d="M-38 -96 Q-18 -118 0 -100 Q18 -118 38 -96 Q16 -108 0 -92 Q-16 -108 -38 -96 Z" fill="{ink}" fill-opacity="0.88"/>
+        <path d="M-54 -69 L-29 -67 M-56 -57 L-29 -59 M54 -69 L29 -67 M56 -57 L29 -59" stroke="{ink}" stroke-width="3" stroke-linecap="round"/>
+        {_render_eye_brows_and_pupils(expression, ink, accent, surface, -78)}
+        <polygon points="-5,-65 5,-65 0,-59" fill="{accent}" stroke="{ink}" stroke-width="2.4" stroke-linejoin="round"/>
+        {_render_animal_mouth(expression, ink, accent, -53)}
+        """
+
+    if character_style == "fox_strategist":
+        return f"""
+        <polygon points="-40,-94 -38,-140 -10,-112" fill="{surface}" stroke="{ink}" stroke-width="5" stroke-linejoin="round"/>
+        <polygon points="40,-94 38,-140 10,-112" fill="{surface}" stroke="{ink}" stroke-width="5" stroke-linejoin="round"/>
+        <polygon points="-38,-118 -38,-140 -24,-125" fill="{ink}"/>
+        <polygon points="38,-118 38,-140 24,-125" fill="{ink}"/>
+        <polygon points="-32,-102 -30,-118 -16,-110" fill="{accent}" fill-opacity="0.32"/>
+        <polygon points="32,-102 30,-118 16,-110" fill="{accent}" fill-opacity="0.32"/>
+        <path d="M-47 -76 Q-43 -116 0 -116 Q43 -116 47 -76 Q53 -56 32 -44 Q12 -32 0 -32 Q-12 -32 -32 -44 Q-53 -56 -47 -76 Z" fill="{surface}" stroke="{ink}" stroke-width="5.2" stroke-linejoin="round"/>
+        <path d="M-43 -76 Q-18 -64 0 -55 Q18 -64 43 -76 Q41 -112 0 -114 Q-41 -112 -43 -76 Z" fill="{accent}" fill-opacity="0.18"/>
+        {_render_eye_brows_and_pupils(expression, ink, accent, surface, -79)}
+        <ellipse cx="0" cy="-60" rx="5.5" ry="4" fill="{ink}"/>
+        {_render_animal_mouth(expression, ink, accent, -50)}
+        """
+
+    if character_style == "shiba_sensei":
+        return f"""
+        <path d="M-38 -96 Q-43 -136 -25 -136 Q-12 -136 -8 -110 Z" fill="{surface}" stroke="{ink}" stroke-width="5" stroke-linejoin="round"/>
+        <path d="M38 -96 Q43 -136 25 -136 Q12 -136 8 -110 Z" fill="{surface}" stroke="{ink}" stroke-width="5" stroke-linejoin="round"/>
+        <path d="M-32 -102 Q-34 -124 -24 -124 Q-17 -124 -14 -108 Z" fill="{accent}" fill-opacity="0.32"/>
+        <path d="M32 -102 Q34 -124 24 -124 Q17 -124 14 -108 Z" fill="{accent}" fill-opacity="0.32"/>
+        <path d="M-46 -78 Q-44 -116 0 -116 Q44 -116 46 -78 Q52 -46 28 -36 Q0 -28 -28 -36 Q-52 -46 -46 -78 Z" fill="{surface}" stroke="{ink}" stroke-width="5.2" stroke-linejoin="round"/>
+        <path d="M-44 -78 Q-42 -114 0 -114 Q42 -114 44 -78 Q22 -70 0 -76 Q-22 -70 -44 -78 Z" fill="{accent}" fill-opacity="0.18"/>
+        <ellipse cx="0" cy="-56" rx="26" ry="18" fill="{surface}" stroke="{ink}" stroke-width="2.4" stroke-opacity="0.32"/>
+        <circle cx="-15" cy="-93" r="3.4" fill="{accent}" fill-opacity="0.85"/>
+        <circle cx="15" cy="-93" r="3.4" fill="{accent}" fill-opacity="0.85"/>
+        {_render_eye_brows_and_pupils(expression, ink, accent, surface, -79)}
+        <ellipse cx="0" cy="-64" rx="6.2" ry="4.3" fill="{ink}"/>
+        {_render_animal_mouth(expression, ink, accent, -51)}
+        """
+
+    return f"""
+    <circle cx="0" cy="-76" r="46" fill="{surface}" stroke="{ink}" stroke-width="5.2"/>
+    <path d="M-38 -102 Q-18 -134 18 -126 Q38 -120 44 -94 Q18 -110 -12 -106 Q-28 -104 -38 -102 Z" fill="{ink}"/>
+    {_render_face_expression(expression, ink, accent, surface)}
+    """
+
+
+def _render_mascot_tail_behind(
+    character_style: str,
+    is_meditating: bool,
+    ink: str,
+    accent: str,
+    surface: str,
+) -> str:
+    y_offset = 20 if is_meditating else 0
+    if character_style == "cat_stoic":
+        return f"""<g transform="translate(0, {y_offset})">
+        <path d="M-24 94 Q-72 92 -76 48 Q-78 24 -60 22" fill="none" stroke="{ink}" stroke-width="9" stroke-linecap="round"/>
+        <circle cx="-60" cy="22" r="5.5" fill="{accent}"/>
+        </g>"""
+    if character_style == "fox_strategist":
+        return f"""<g transform="translate(0, {y_offset})">
+        <path d="M-22 98 Q-78 102 -84 54 Q-86 24 -56 18 Q-42 42 -34 76 Z" fill="{accent}" fill-opacity="0.22" stroke="{ink}" stroke-width="5" stroke-linejoin="round"/>
+        <path d="M-76 34 Q-72 20 -56 18 Q-49 29 -56 42 Z" fill="{surface}" stroke="{ink}" stroke-width="3.5" stroke-linejoin="round"/>
+        </g>"""
+    if character_style == "shiba_sensei":
+        return f"""<g transform="translate(0, {y_offset})">
+        <path d="M-24 92 Q-68 88 -70 52 Q-70 30 -48 34 Q-36 38 -36 56" fill="none" stroke="{ink}" stroke-width="10" stroke-linecap="round"/>
+        <circle cx="-48" cy="34" r="5" fill="{accent}" fill-opacity="0.8"/>
+        </g>"""
+    if character_style == "owl_philosopher" and not is_meditating:
+        return f'<polygon points="-14,102 0,126 14,102" fill="{accent}" fill-opacity="0.25" stroke="{ink}" stroke-width="4" stroke-linejoin="round"/>'
+    return ""
+
+
+def _render_mascot_wing_trim(character_style: str, ink: str, accent: str) -> str:
+    if character_style != "owl_philosopher":
+        return ""
+    return f"""
+    <path d="M-34 8 L-45 27 L-30 35 M34 8 L45 27 L30 35" fill="none" stroke="{accent}" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M-16 86 Q0 96 16 86" fill="none" stroke="{ink}" stroke-width="2.5" stroke-opacity="0.35" stroke-linecap="round"/>
+    """
 
 
 def _render_face_expression(expression: str, ink: str, accent: str, surface: str) -> str:
@@ -582,29 +832,34 @@ def _render_studio_character(
     scale: float = 1.0,
     flip_x: bool = False,
     accent_tie: bool = True,
+    character_style: str = DEFAULT_STUDIO_CHARACTER_STYLE,
 ) -> str:
     ink = theme.ink_color
     accent = theme.accent_color
     surface = theme.surface_fill
     tie_color = accent if accent_tie else ink
     sx = -scale if flip_x else scale
+    resolved_style = resolve_studio_character_style(character_style)
+    head_svg = _render_mascot_head_and_face(resolved_style, expression, ink, accent, surface)
+    wing_trim_svg = _render_mascot_wing_trim(resolved_style, ink, accent)
 
     if pose == "meditating_zen":
+        tail_svg = _render_mascot_tail_behind(resolved_style, True, ink, accent, surface)
         return f"""<g transform="translate({x}, {y}) scale({sx}, {scale})">
       <ellipse cx="0" cy="146" rx="88" ry="15" fill="{ink}" fill-opacity="0.12"/>
       <circle cx="0" cy="-25" r="120" fill="{accent}" fill-opacity="0.06" stroke="{accent}" stroke-width="2.5" stroke-dasharray="10 8"/>
+      {tail_svg}
       <path d="M-24 92 Q-78 104 -68 132 Q-42 146 8 134" fill="none" stroke="{ink}" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
       <path d="M24 92 Q78 104 68 132 Q42 146 -8 134" fill="none" stroke="{ink}" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
       <path d="M-32 8 Q0 -6 32 8 L38 96 Q0 108 -38 96 Z" fill="{surface}" stroke="{ink}" stroke-width="5" stroke-linejoin="round"/>
+      {wing_trim_svg}
       <polygon points="0,4 -7,34 0,60 7,34" fill="{tie_color}"/>
       <path d="M-30 22 Q-66 56 -56 106 L-34 114" fill="none" stroke="{ink}" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
       <path d="M30 22 Q66 56 56 106 L34 114" fill="none" stroke="{ink}" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
       <circle cx="-32" cy="114" r="7" fill="{surface}" stroke="{ink}" stroke-width="4"/>
       <circle cx="32" cy="114" r="7" fill="{surface}" stroke="{ink}" stroke-width="4"/>
       <rect x="-8" y="-32" width="16" height="32" rx="6" fill="{surface}" stroke="{ink}" stroke-width="4.5"/>
-      <circle cx="0" cy="-76" r="46" fill="{surface}" stroke="{ink}" stroke-width="5.2"/>
-      <path d="M-36 -104 Q-14 -132 18 -124 Q38 -118 42 -96 Q16 -112 -14 -108 Q-28 -106 -36 -104 Z" fill="{ink}"/>
-      {_render_face_expression(expression, ink, accent, surface)}
+      {head_svg}
     </g>"""
 
     head_shift_x = 0
@@ -733,22 +988,24 @@ def _render_studio_character(
         left_hand = (-48, 102)
         right_hand = (92, 38)
 
+    tail_svg = _render_mascot_tail_behind(resolved_style, False, ink, accent, surface)
+
     return f"""<g transform="translate({x}, {y}) scale({sx}, {scale})">
     <ellipse cx="0" cy="172" rx="68" ry="12" fill="{ink}" fill-opacity="0.12"/>
     {legs_svg}
     <g transform="{torso_skew}">
+      {tail_svg}
       <path d="{left_arm}" fill="none" stroke="{ink}" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
       <circle cx="{left_hand[0]}" cy="{left_hand[1]}" r="7.5" fill="{surface}" stroke="{ink}" stroke-width="4"/>
       <path d="M-34 8 Q0 -6 34 8 L28 104 Q0 112 -28 104 Z" fill="{surface}" stroke="{ink}" stroke-width="5.2" stroke-linejoin="round"/>
+      {wing_trim_svg}
       <path d="M-14 4 L0 20 L14 4" fill="none" stroke="{ink}" stroke-width="3.5" stroke-linejoin="round"/>
       <polygon points="0,14 -8,44 0,76 8,44" fill="{tie_color}"/>
       <path d="{right_arm}" fill="none" stroke="{ink}" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
       <circle cx="{right_hand[0]}" cy="{right_hand[1]}" r="7.5" fill="{surface}" stroke="{ink}" stroke-width="4"/>
       <g transform="translate({head_shift_x}, {head_shift_y})">
         <rect x="-8" y="-32" width="16" height="34" rx="6" fill="{surface}" stroke="{ink}" stroke-width="4.5"/>
-        <circle cx="0" cy="-76" r="46" fill="{surface}" stroke="{ink}" stroke-width="5.2"/>
-        <path d="M-38 -102 Q-18 -134 18 -126 Q38 -120 44 -94 Q18 -110 -12 -106 Q-28 -104 -38 -102 Z" fill="{ink}"/>
-        {_render_face_expression(expression, ink, accent, surface)}
+        {head_svg}
       </g>
       {extra_prop}
     </g>
@@ -1195,6 +1452,7 @@ def render_studio_shot_svg(
 
     char_scale = 0.96 if is_vertical else 1.04
     prop_scale = 0.94 if is_vertical else 1.06
+    char_style = resolve_studio_character_style(getattr(blueprint, "character_style", None))
 
     beat1_svg = ""
     beat2_svg = ""
@@ -1231,7 +1489,7 @@ def render_studio_shot_svg(
         ov_y = left_y if blueprint.overlay_effect == "big_x_crossout" else stage_mid_y - 12
         beat2_svg = _render_overlay_effect(ov_eff, ov_x, ov_y, theme)
         beat3_svg = _render_studio_character(
-            right_x, right_y, blueprint.character_pose, blueprint.character_expression, theme, scale=char_scale, flip_x=not is_vertical
+            right_x, right_y, blueprint.character_pose, blueprint.character_expression, theme, scale=char_scale, flip_x=not is_vertical, character_style=char_style
         )
 
     elif comp == "split_comparison":
@@ -1264,7 +1522,7 @@ def render_studio_shot_svg(
         <rect x="{right_px}" y="{right_py}" width="{panel_w}" height="{panel_h}" rx="20" fill="{accent}" fill-opacity="0.08" stroke="{accent}" stroke-width="4"/>
         <rect x="{right_mid_x - 120}" y="{right_py + 18}" width="240" height="40" rx="20" fill="{accent}"/>
         <text x="{right_mid_x}" y="{right_py + 45}" text-anchor="middle" font-family="{FONT_FAMILY}" font-size="20" font-weight="800" fill="{surface}">{_escape_xml(right_tag)}</text>
-        {_render_studio_character(right_mid_x, right_mid_y + 34, blueprint.character_pose, blueprint.character_expression, theme, scale=0.72 if is_vertical else 0.84)}
+        {_render_studio_character(right_mid_x, right_mid_y + 34, blueprint.character_pose, blueprint.character_expression, theme, scale=0.72 if is_vertical else 0.84, character_style=char_style)}
         """
 
     elif comp == "cause_effect_flow":
@@ -1273,7 +1531,7 @@ def render_studio_shot_svg(
         right_x = stage_mid_x if is_vertical else stage_x + round(stage_w * 0.76)
         right_y = stage_y + round(stage_h * 0.74) if is_vertical else stage_mid_y - 4
         beat1_svg = _render_studio_character(
-            left_x, left_y, blueprint.character_pose, blueprint.character_expression, theme, scale=char_scale * 0.96
+            left_x, left_y, blueprint.character_pose, blueprint.character_expression, theme, scale=char_scale * 0.96, character_style=char_style
         )
         mid_label = blueprint.left_badge or "Chuyển hóa"
         beat2_svg = f"""
@@ -1297,6 +1555,7 @@ def render_studio_shot_svg(
             theme,
             scale=0.82 if is_vertical else 0.96,
             accent_tie=False,
+            character_style=char_style,
         )
         beat2_svg = _render_studio_prop(
             blueprint.primary_prop, stage_mid_x, stage_mid_y - 38, 0.62 if is_vertical else 0.84, theme
@@ -1310,6 +1569,7 @@ def render_studio_shot_svg(
             scale=0.82 if is_vertical else 0.98,
             flip_x=True,
             accent_tie=True,
+            character_style=char_style,
         )
 
     elif comp == "character_on_pedestal":
@@ -1328,6 +1588,7 @@ def render_studio_shot_svg(
                 blueprint.character_expression,
                 theme,
                 scale=0.90 if is_vertical else 0.94,
+                character_style=char_style,
             )
             + _render_studio_prop(
                 blueprint.primary_prop,
@@ -1350,7 +1611,7 @@ def render_studio_shot_svg(
             blueprint.caption or "3. Hành động điềm tĩnh, dứt khoát",
         ]
         beat1_svg = _render_studio_character(
-            char_x, char_y, blueprint.character_pose, blueprint.character_expression, theme, scale=0.80 if is_vertical else 0.95
+            char_x, char_y, blueprint.character_pose, blueprint.character_expression, theme, scale=0.80 if is_vertical else 0.95, character_style=char_style
         )
         if not is_vertical:
             beat2_svg = (
@@ -1377,7 +1638,7 @@ def render_studio_shot_svg(
         right_x = stage_mid_x if is_vertical else stage_x + round(stage_w * 0.72)
         right_y = stage_y + round(stage_h * 0.72) if is_vertical else stage_mid_y - 8
         beat1_svg = _render_studio_character(
-            left_x, left_y, blueprint.character_pose, blueprint.character_expression, theme, scale=char_scale
+            left_x, left_y, blueprint.character_pose, blueprint.character_expression, theme, scale=char_scale, character_style=char_style
         )
         if blueprint.overlay_effect != "none":
             ov_x = left_x if blueprint.overlay_effect == "big_x_crossout" else stage_mid_x
@@ -1468,7 +1729,7 @@ def render_studio_thumbnail_svg(
   <rect x="696" y="66" width="512" height="576" rx="28" fill="{surface}" stroke="{ink}" stroke-width="5.5"/>
   <circle cx="952" cy="350" r="196" fill="{accent}" fill-opacity="0.07"/>
   {_render_studio_prop(blueprint.primary_prop, 1054, 242, 0.86, theme)}
-  {_render_studio_character(854, 416, blueprint.character_pose, blueprint.character_expression, theme, scale=1.18)}
+  {_render_studio_character(854, 416, blueprint.character_pose, blueprint.character_expression, theme, scale=1.18, character_style=resolve_studio_character_style(getattr(blueprint, "character_style", None)))}
   {ov_svg}
 </svg>"""
 

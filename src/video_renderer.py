@@ -106,12 +106,13 @@ def render_scene_clip(
     duration_sec: float,
     motion_type: str,
     resolution: Tuple[int, int],
+    narration_text: str = "",
 ) -> Path:
     """
     Render 1 phân cảnh hoàn chỉnh khớp 100% với thời lượng giọng đọc:
     - Nếu `VIDEO_VISUAL_MODE == "pen_sketch"`: Cây bút chuyển động vẽ nét phác họa rồi đổ bóng hiện hình.
     - Nếu `VIDEO_VISUAL_MODE == "stickman_whiteboard"` hoặc `"ken_burns_2d"`:
-      Chuyển động camera sine-eased 30fps mượt mà (KHÔNG dùng cây bút di chuyển), kết hợp fade êm.
+      Chuyển động camera sine-eased 30fps mượt mà (KHÔNG dùng cây bút di chuyển), kết hợp sub chạy từng từ.
     """
     if config.VIDEO_VISUAL_MODE == "pen_sketch":
         from src.sketch_animator import render_pen_sketch_scene
@@ -123,6 +124,7 @@ def render_scene_clip(
             output_clip_path=output_clip_path,
             duration_sec=duration_sec,
             resolution=resolution,
+            narration_text=narration_text,
         )
 
     width, height = resolution
@@ -133,11 +135,38 @@ def render_scene_clip(
     motion_filter = _build_motion_filter(motion_type, width, height, total_frames, fps)
     fade_out_start = max(0.0, padded_duration - 0.22)
 
-    # Filter complex: chuyển động 2D sine-eased -> ghép overlay RGBA -> fade vào/ra nhẹ
+    ass_path: Optional[Path] = None
+    ass_filter = ""
+    if narration_text and narration_text.strip():
+        try:
+            from src.studio_motion_renderer import write_progressive_ass_subtitle
+
+            ass_path = output_clip_path.with_suffix(".ass")
+            write_progressive_ass_subtitle(
+                text=narration_text,
+                duration_sec=duration_sec,
+                output_ass_path=ass_path,
+                width=width,
+                height=height,
+            )
+            ass_escaped = (
+                str(ass_path.resolve().as_posix())
+                .replace("\\", "/")
+                .replace(":", "\\:")
+                .replace("'", "\\'")
+            )
+            ass_filter = f",ass=filename='{ass_escaped}'"
+        except Exception as ass_err:
+            logger.warning("[SUBTITLE ASS FALLBACK] Bỏ qua phụ đề ASS (%s).", ass_err)
+            ass_path = None
+            ass_filter = ""
+
+    # Filter complex: chuyển động 2D sine-eased -> ghép overlay RGBA -> sub chạy chữ -> fade vào/ra nhẹ
     filter_complex = (
         f"[0:v]{motion_filter},format=rgba[bg];"
         f"[1:v]scale={width}:{height},format=rgba[ov];"
-        f"[bg][ov]overlay=0:0:shortest=1,"
+        f"[bg][ov]overlay=0:0:shortest=1"
+        f"{ass_filter},"
         f"fade=t=in:st=0:d=0.18,"
         f"fade=t=out:st={fade_out_start:.3f}:d=0.22,"
         f"format=yuv420p[vout];"
@@ -184,7 +213,11 @@ def render_scene_clip(
         "-shortest",
         str(output_clip_path),
     ]
-    _run_ffmpeg(cmd, f"scene_{output_clip_path.stem}")
+    try:
+        _run_ffmpeg(cmd, f"scene_{output_clip_path.stem}")
+    finally:
+        if ass_path is not None:
+            ass_path.unlink(missing_ok=True)
     return output_clip_path
 
 
@@ -196,6 +229,7 @@ def render_multi_beat_scene_clip(
     output_clip_path: Path,
     motion_type: str,
     resolution: Tuple[int, int],
+    narration_text: str = "",
 ) -> Path:
     """
     Render 1 phân cảnh gồm 3–4 ảnh nối tiếp nhau (mỗi ảnh ~3–4 giây khớp từng cụm ý lời thoại)
@@ -213,6 +247,7 @@ def render_multi_beat_scene_clip(
             duration_sec=total_dur,
             motion_type=motion_type,
             resolution=resolution,
+            narration_text=narration_text,
         )
 
     width, height = resolution
@@ -270,12 +305,38 @@ def render_multi_beat_scene_clip(
     ffmpeg_inputs.extend(["-loop", "1", "-t", f"{padded_total:.3f}", "-i", str(overlay_path)])
     ffmpeg_inputs.extend(["-i", str(audio_path)])
 
+    ass_path: Optional[Path] = None
+    ass_filter = ""
+    if narration_text and narration_text.strip():
+        try:
+            from src.studio_motion_renderer import write_progressive_ass_subtitle
+
+            ass_path = output_clip_path.with_suffix(".ass")
+            write_progressive_ass_subtitle(
+                text=narration_text,
+                duration_sec=sum(beat_durations),
+                output_ass_path=ass_path,
+                width=width,
+                height=height,
+            )
+            ass_escaped = (
+                str(ass_path.resolve().as_posix())
+                .replace("\\", "/")
+                .replace(":", "\\:")
+                .replace("'", "\\'")
+            )
+            ass_filter = f",ass=filename='{ass_escaped}'"
+        except Exception as ass_err:
+            logger.warning("[SUBTITLE ASS FALLBACK] Bỏ qua phụ đề ASS (%s).", ass_err)
+            ass_path = None
+            ass_filter = ""
+
     fade_out_scene = max(0.0, padded_total - 0.20)
     filter_complex = (
         "".join(filter_parts)
         + seq_conv
         + f"[{ov_idx}:v]scale={width}:{height},format=rgba[ov];"
-        + f"[bgseq][ov]overlay=0:0:shortest=1,fade=t=out:st={fade_out_scene:.3f}:d=0.20,format=yuv420p[vout];"
+        + f"[bgseq][ov]overlay=0:0:shortest=1{ass_filter},fade=t=out:st={fade_out_scene:.3f}:d=0.20,format=yuv420p[vout];"
         + f"[{aud_idx}:a]apad=pad_dur=0.35,atrim=0:{padded_total:.3f},asetpts=PTS-STARTPTS[aout]"
     )
 
@@ -310,7 +371,11 @@ def render_multi_beat_scene_clip(
         "-shortest",
         str(output_clip_path),
     ]
-    _run_ffmpeg(cmd, f"multi_beat_{output_clip_path.stem}")
+    try:
+        _run_ffmpeg(cmd, f"multi_beat_{output_clip_path.stem}")
+    finally:
+        if ass_path is not None:
+            ass_path.unlink(missing_ok=True)
     return output_clip_path
 
 

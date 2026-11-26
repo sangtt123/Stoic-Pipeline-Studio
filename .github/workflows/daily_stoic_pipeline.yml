@@ -31,6 +31,17 @@ on:
         options:
           - gemini_tts
           - cloud_tts
+      character_style:
+        description: 'Nhân vật dẫn chuyện 2D (Cú Mèo / Mèo / Cáo / Shiba / Người que)'
+        required: false
+        default: 'owl_philosopher'
+        type: choice
+        options:
+          - owl_philosopher
+          - cat_stoic
+          - fox_strategist
+          - shiba_sensei
+          - stickman
 
 permissions:
   contents: read
@@ -39,6 +50,7 @@ env:
   PIPELINE_LANGUAGE: ${{ github.event.inputs.language || 'vi-VN' }}
   PIPELINE_ASPECT_RATIO: ${{ github.event.inputs.aspect_ratio || '16:9' }}
   VIDEO_VISUAL_MODE: 'stickman_whiteboard'
+  STUDIO_CHARACTER_STYLE: ${{ github.event.inputs.character_style || 'owl_philosopher' }}
   PEN_SKETCH_PAPER_THEME: 'classic_parchment'
   TTS_PRIMARY_PROVIDER: ${{ github.event.inputs.tts_provider || 'gemini_tts' }}
   TTS_VOICE_PERSONA: 'Puck'
