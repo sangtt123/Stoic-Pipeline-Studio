@@ -295,6 +295,13 @@ def _normalize_script(raw_script: Any, combo: MatrixCombo, video_index: int) -> 
 
 def plan_daily_scripts() -> Path:
     """Chạy toàn bộ Giai đoạn 1: tạo 5 kịch bản đạt chuẩn, gán số thứ tự thư mục Drive & xuất scripts.json."""
+    logger.info(
+        "[PIPELINE BUILD %s] LLM ưu tiên='%s' | Ngưỡng trùng=%.2f | Số video=%d",
+        getattr(config, "PIPELINE_BUILD", "v2.4"),
+        config.LLM_FALLBACK_MODELS[0] if config.LLM_FALLBACK_MODELS else "unknown",
+        config.SEMANTIC_SIMILARITY_THRESHOLD,
+        config.DAILY_VIDEO_COUNT,
+    )
     vertex = VertexAIClient()
     drive = DriveManager()
     dedup = DedupManager(drive=drive, vertex=vertex)

@@ -100,13 +100,27 @@ class VertexAIClient:
         self.project_id = auth.project_id
         self.client_email = auth.client_email
 
-        # LLM sử dụng location="global" để tận dụng điều hướng tải đa vùng trên Vertex AI
+        # LLM đa vùng:
+        # - Model preview (gemini-3*) chạy trên location="global"
+        # - Model GA (gemini-2.5*) chạy trên regional endpoint (mặc định us-central1)
         self.llm_client = genai.Client(
             vertexai=True,
             project=auth.project_id,
             location=config.VERTEX_LLM_LOCATION,
             credentials=auth.credentials,
         )
+        regional_loc = config.VERTEX_IMAGEN_LOCATION or "us-central1"
+        self.llm_regional_client = (
+            self.llm_client
+            if regional_loc == config.VERTEX_LLM_LOCATION
+            else genai.Client(
+                vertexai=True,
+                project=auth.project_id,
+                location=regional_loc,
+                credentials=auth.credentials,
+            )
+        )
+        self._regional_location = regional_loc
         self.imagen_client = genai.Client(
             vertexai=True,
             project=auth.project_id,
@@ -120,8 +134,49 @@ class VertexAIClient:
             credentials=auth.credentials,
         )
 
+        # Bộ nhớ tạm các model trả 404 NOT_FOUND để không gọi lại lãng phí ở các tác vụ sau
+        self._unavailable_models: set[str] = set()
         # Thống kê số lần hạ cấp model để theo dõi vận hành
         self.fallback_events: List[Dict[str, Any]] = []
+
+    def _generate_content_smart(
+        self,
+        model_name: str,
+        contents: Any,
+        gen_config: types.GenerateContentConfig,
+    ) -> Any:
+        """
+        Tự động định tuyến đúng endpoint Vertex AI theo họ model:
+        - gemini-2.5-* / gemini-2.0-*: ưu tiên regional (us-central1), 404 mới thử global
+        - gemini-3*: ưu tiên global, 404 mới thử regional (us-central1)
+        """
+        prefer_regional = model_name.startswith(("gemini-2.5", "gemini-2.0"))
+        clients = (
+            [self.llm_regional_client, self.llm_client]
+            if prefer_regional
+            else [self.llm_client, self.llm_regional_client]
+        )
+        # Loại trùng nếu 2 location giống nhau
+        unique_clients: List[genai.Client] = []
+        for c in clients:
+            if c not in unique_clients:
+                unique_clients.append(c)
+
+        last_exc: Optional[Exception] = None
+        for idx, client in enumerate(unique_clients):
+            try:
+                return client.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    config=gen_config,
+                )
+            except Exception as exc:
+                last_exc = exc
+                if idx + 1 < len(unique_clients) and _extract_status_code(exc) == 404:
+                    continue
+                raise
+        assert last_exc is not None
+        raise last_exc
 
     def _execute_with_fallback(
         self,
@@ -137,6 +192,9 @@ class VertexAIClient:
         last_error: Optional[Exception] = None
 
         for idx, model_name in enumerate(model_chain):
+            if model_name in self._unavailable_models:
+                continue
+
             max_attempts = len(config.BACKOFF_DELAYS_SECONDS) + 1
 
             for attempt in range(max_attempts):
@@ -148,6 +206,8 @@ class VertexAIClient:
 
                     # Nếu model không tồn tại / hết quota ngày => chuyển model ngay lập tức
                     if _is_daily_quota_or_unavailable(exc):
+                        if status_code == 404:
+                            self._unavailable_models.add(model_name)
                         logger.warning(
                             "[AUTO-FALLBACK] Task='%s' | Model='%s' không khả dụng hoặc hết quota ngày "
                             "(HTTP %s): %s",
@@ -219,10 +279,10 @@ class VertexAIClient:
         """Gọi LLM trả về JSON thuần, tự động fallback qua chuỗi LLM_FALLBACK_MODELS."""
 
         def _call(model_name: str) -> Dict[str, Any]:
-            response = self.llm_client.models.generate_content(
-                model=model_name,
+            response = self._generate_content_smart(
+                model_name=model_name,
                 contents=prompt,
-                config=types.GenerateContentConfig(
+                gen_config=types.GenerateContentConfig(
                     system_instruction=system_instruction,
                     temperature=temperature,
                     response_mime_type="application/json",
@@ -263,13 +323,13 @@ class VertexAIClient:
         image_bytes = contact_sheet_path.read_bytes()
 
         def _call(model_name: str) -> Dict[str, Any]:
-            response = self.llm_client.models.generate_content(
-                model=model_name,
+            response = self._generate_content_smart(
+                model_name=model_name,
                 contents=[
                     types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
                     prompt,
                 ],
-                config=types.GenerateContentConfig(
+                gen_config=types.GenerateContentConfig(
                     system_instruction=system_instruction,
                     temperature=0.2,
                     response_mime_type="application/json",
@@ -277,6 +337,13 @@ class VertexAIClient:
             )
             text = response.text or ""
             parsed = json.loads(_strip_json_fences(text))
+            if isinstance(parsed, list):
+                if len(parsed) > 0 and isinstance(parsed[0], dict):
+                    parsed = parsed[0]
+                else:
+                    raise ValueError(f"Vision model '{model_name}' trả về JSON list không hợp lệ.")
+            if not isinstance(parsed, dict):
+                raise ValueError(f"Vision model '{model_name}' trả về kiểu JSON không phải object.")
             logger.info("[VISION OK] Task='%s' | Model='%s'", task_name, model_name)
             return parsed
 
