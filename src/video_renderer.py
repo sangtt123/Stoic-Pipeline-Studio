@@ -40,15 +40,28 @@ def _build_motion_filter(
     motion_type: str, width: int, height: int, frames: int, fps: int
 ) -> str:
     """
-    Tạo chuyển động camera mượt theo đường cong sine-eased (6 phong cách luân phiên)
-    kèm nhịp thở quang học rất nhẹ (organic breathing) để khung hình luôn sống động, không bị đơ tĩnh.
-    Phóng to overscan 1.22x đảm bảo tuyệt đối không bao giờ hở viền đen khi lia/zoom.
+    Tạo chuyển động camera mượt theo đường cong sine-eased:
+    - Chế độ `stickman_whiteboard`: phóng nhẹ ở tâm (1.00 -> 1.028 -> 1.00), tuyệt đối không
+      crop 1.22x hay lia ngang để giữ trọn vẹn khung thẻ trắng, badge 1/4 và hộp Caption ở đáy.
+    - Chế độ `ken_burns_2d`: overscan 1.22x + 6 kiểu zoom/pan/thở quang học.
     """
+    total_f = max(frames, 1)
+    ease = f"(0.5*(1-cos(PI*min(on/{total_f},1))))"
+
+    if getattr(config, "VIDEO_VISUAL_MODE", "") == "stickman_whiteboard":
+        if motion_type in ("zoom_out", "pan_left", "drift_down"):
+            zoom_expr = f"1.028-0.028*{ease}"
+        else:
+            zoom_expr = f"1.000+0.028*{ease}"
+        return (
+            f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height},"
+            f"zoompan=z='{zoom_expr}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+            f"d={total_f}:s={width}x{height}:fps={fps}"
+        )
+
     overscan_w = int(width * 1.22)
     overscan_h = int(height * 1.22)
-    total_f = max(frames, 1)
-    # Đường cong ease-in-out mềm mượt: 0 -> 1 theo cos(PI * t)
-    ease = f"(0.5*(1-cos(PI*min(on/{total_f},1))))"
     # Nhịp thở quang học siêu êm (chu kỳ ~4.2 giây) tạo cảm giác khung hình có sức sống
     breath_y = f"(sin(2*PI*on/{max(fps * 4.2, 1.0):.2f})*ih*0.008)"
 
@@ -214,8 +227,9 @@ def render_multi_beat_scene_clip(
     xfade_dur = round(min(0.28, min(adjusted_durs) * 0.25), 3)
     use_xfade = xfade_dur >= 0.08
 
-    motion_cycle = ["zoom_in", "pan_right", "zoom_out", "pan_left", "drift_up", "drift_down"]
-    xfade_cycle = ["smoothleft", "smoothright", "slideleft", "slideright", "fade"]
+    is_whiteboard = getattr(config, "VIDEO_VISUAL_MODE", "") == "stickman_whiteboard"
+    motion_cycle = ["zoom_in", "zoom_out", "zoom_in", "zoom_out"] if is_whiteboard else ["zoom_in", "pan_right", "zoom_out", "pan_left", "drift_up", "drift_down"]
+    xfade_cycle = ["fade"] if is_whiteboard else ["smoothleft", "smoothright", "slideleft", "slideright", "fade"]
     start_idx = motion_cycle.index(motion_type) if motion_type in motion_cycle else 0
 
     ffmpeg_inputs: List[str] = []

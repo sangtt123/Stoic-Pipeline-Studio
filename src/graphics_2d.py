@@ -93,9 +93,37 @@ def render_scene_overlay(
     is_vertical = height > width
 
     canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    _draw_subtle_vignette_and_grain(canvas, width, height, seed=1000 + scene_index * 37)
-
     draw = ImageDraw.Draw(canvas, "RGBA")
+
+    # Trong chế độ stickman_whiteboard, mỗi ảnh beat SVG đã có sẵn Stage Card trắng bo góc,
+    # badge đếm nhịp 1/4 và hộp Caption nền trắng sắc nét ở đáy -> KHÔNG phủ scrim tối, viền vàng
+    # hay hộp quote đè lên làm sai lệch giao diện Studio; chỉ vẽ thanh tiến trình siêu mảnh ở mép đáy.
+    if getattr(config, "VIDEO_VISUAL_MODE", "") == "stickman_whiteboard":
+        accent_rgb = _hex_to_rgb(
+            getattr(config, "WHITEBOARD_ACCENT_COLOR", "#2563EB"), (37, 99, 235)
+        )
+        bar_margin_x = int(width * (44 / 720 if is_vertical else 68 / 1280))
+        bar_y = height - (12 if is_vertical else 10)
+        bar_h = 5 if is_vertical else 4
+        bar_total_w = max(40, width - 2 * bar_margin_x)
+        progress_ratio = max(0.03, min(1.0, (scene_index + 1) / max(total_scenes, 1)))
+        bar_fill_w = int(bar_total_w * progress_ratio)
+
+        draw.rounded_rectangle(
+            [bar_margin_x, bar_y, bar_margin_x + bar_total_w, bar_y + bar_h],
+            radius=3,
+            fill=(*accent_rgb, 38),
+        )
+        draw.rounded_rectangle(
+            [bar_margin_x, bar_y, bar_margin_x + max(6, bar_fill_w), bar_y + bar_h],
+            radius=3,
+            fill=(*accent_rgb, 215),
+        )
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        canvas.save(output_path, format="PNG")
+        return output_path
+
+    _draw_subtle_vignette_and_grain(canvas, width, height, seed=1000 + scene_index * 37)
 
     # 1. Khung viền biên tập tối giản (hairline border + góc nhấn muted gold)
     margin = int(min(width, height) * 0.036)

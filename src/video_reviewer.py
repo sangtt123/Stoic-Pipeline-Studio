@@ -132,29 +132,56 @@ def review_final_video(
     ]
 
     interval_sec = getattr(config, "CONTACT_SHEET_INTERVAL_SEC", 10)
-    vision_prompt = (
-        f"Bạn đang xem ảnh lưới Contact Sheet (trích xuất 1 frame mỗi {interval_sec} giây theo thứ tự từ trái sang phải, "
-        "từ trên xuống dưới) của một video Triết lý Khắc kỷ 2D.\n\n"
-        f"- Tiêu đề video: {script.get('title')}\n"
-        f"- Phong cách yêu cầu: {config.VISUAL_STYLE_PROMPT}\n"
-        f"- Thời lượng thực tế: {duration:.1f} giây\n"
-        f"- Danh sách phân cảnh: {json.dumps(scenes_digest, ensure_ascii=False)}\n\n"
-        "HÃY KIỂM TRA KHẮT KHE 5 TIÊU CHÍ HÌNH VẼ:\n"
-        "1. Hình ảnh có đồng bộ phong cách 2D tối giản và khớp sát nội dung từng phân cảnh không?\n"
-        "2. Nhân vật có bị méo mặt, biến dạng tay/ngón tay, thừa chi hoặc bố cục rối rắm khó hiểu không?\n"
-        "3. Chữ trích dẫn (quote_overlay) có bị tràn khung, cắt chữ, chồng đè lên hình hoặc lỗi font không?\n"
-        "4. Có hiện tượng nhiều ô liên tiếp bị lặp hình giống hệt nhau hoặc bị khung trống/màn hình đen không?\n"
-        "5. Có văn bản rác/ký tự tiếng Anh méo mó do AI tự vẽ đè vào trong tranh không?\n\n"
-        "Trả về JSON đúng cấu trúc:\n"
-        "{\n"
-        '  "passed": true/false,\n'
-        '  "vision_issues": ["Mô tả ngắn gọn từng lỗi nếu có"],\n'
-        '  "bad_scene_indices": [1, 5],\n'
-        '  "summary": "Tóm tắt đánh giá chất lượng hình ảnh trong 1 câu"\n'
-        "}\n"
-        "Lưu ý: `bad_scene_indices` là danh sách `scene_id` (đánh số từ 1) cần tự động vẽ lại ảnh/overlay. "
-        "Chỉ trả `passed: true` và `bad_scene_indices: []` khi toàn bộ hình vẽ sạch, rõ nét, không lỗi."
-    )
+    if getattr(config, "VIDEO_VISUAL_MODE", "") == "stickman_whiteboard":
+        vision_prompt = (
+            f"Bạn đang xem ảnh lưới Contact Sheet (trích xuất 1 frame mỗi {interval_sec} giây theo thứ tự từ trái sang phải, "
+            "từ trên xuống dưới) của một video Studio Vector Whiteboard 2D.\n\n"
+            f"- Tiêu đề video: {script.get('title')}\n"
+            f"- Thời lượng thực tế: {duration:.1f} giây\n"
+            f"- Danh sách phân cảnh: {json.dumps(scenes_digest, ensure_ascii=False)}\n\n"
+            "MÔ TẢ ĐỊNH DẠNG CHUẨN CỦA VIDEO NÀY (ĐÂY LÀ THIẾT KẾ CHỦ ĐÍCH, KHÔNG PHẢI LỖI):\n"
+            "- Mỗi khung hình có nền studio đồng nhất, 1 thẻ sân khấu trắng bo góc chứa hình minh họa người que 2D + biểu tượng ẩn dụ, "
+            "thẻ đếm nhịp (1/4, 2/4...) ở góc trên phải, và hộp Caption chữ Việt sắc nét có thanh nhấn màu xanh ở bên dưới.\n"
+            "- Vì các beat dùng chung bố cục khung thẻ trắng cố định để mắt người xem tập trung vào hình và caption bên trong, "
+            "đừng đánh lỗi 'lặp khung hình' chỉ vì đường viền thẻ trắng giống nhau — hãy kiểm tra phần hình vẽ và chữ bên trong thẻ.\n\n"
+            "HÃY KIỂM TRA 4 TIÊU CHÍ CHẤT LƯỢNG:\n"
+            "1. Toàn bộ các ô đều hiển thị hình minh họa người que / ẩn dụ 2D rõ nét, KHÔNG bị màn hình đen hoặc khung trắng trống rỗng?\n"
+            "2. Hình vẽ người que và biểu tượng không bị lỗi hiển thị, vỡ hình hoặc cắt mất đầu/thân bất thường?\n"
+            "3. Chữ trong hộp Caption phía dưới và các nhãn minh họa rõ ràng, đọc được, không bị ký tự rác đè chéo lên nhau?\n"
+            "4. Các khung hình nối tiếp có sự biến đổi nội dung/bố cục hợp lý theo mạch kể chuyện không?\n\n"
+            "Trả về JSON đúng cấu trúc:\n"
+            "{\n"
+            '  "passed": true/false,\n'
+            '  "vision_issues": ["Mô tả ngắn gọn từng lỗi nghiêm trọng nếu có"],\n'
+            '  "bad_scene_indices": [],\n'
+            '  "summary": "Tóm tắt đánh giá chất lượng hình ảnh trong 1 câu"\n'
+            "}\n"
+            "Chỉ trả `passed: false` khi thực sự có khung hình bị đen/trống, vỡ hình nghiêm trọng hoặc chữ chồng chéo không đọc được."
+        )
+    else:
+        vision_prompt = (
+            f"Bạn đang xem ảnh lưới Contact Sheet (trích xuất 1 frame mỗi {interval_sec} giây theo thứ tự từ trái sang phải, "
+            "từ trên xuống dưới) của một video Triết lý Khắc kỷ 2D.\n\n"
+            f"- Tiêu đề video: {script.get('title')}\n"
+            f"- Phong cách yêu cầu: {config.VISUAL_STYLE_PROMPT}\n"
+            f"- Thời lượng thực tế: {duration:.1f} giây\n"
+            f"- Danh sách phân cảnh: {json.dumps(scenes_digest, ensure_ascii=False)}\n\n"
+            "HÃY KIỂM TRA KHẮT KHE 5 TIÊU CHÍ HÌNH VẼ:\n"
+            "1. Hình ảnh có đồng bộ phong cách 2D tối giản và khớp sát nội dung từng phân cảnh không?\n"
+            "2. Nhân vật có bị méo mặt, biến dạng tay/ngón tay, thừa chi hoặc bố cục rối rắm khó hiểu không?\n"
+            "3. Chữ trích dẫn (quote_overlay) có bị tràn khung, cắt chữ, chồng đè lên hình hoặc lỗi font không?\n"
+            "4. Có hiện tượng nhiều ô liên tiếp bị lặp hình giống hệt nhau hoặc bị khung trống/màn hình đen không?\n"
+            "5. Có văn bản rác/ký tự tiếng Anh méo mó do AI tự vẽ đè vào trong tranh không?\n\n"
+            "Trả về JSON đúng cấu trúc:\n"
+            "{\n"
+            '  "passed": true/false,\n'
+            '  "vision_issues": ["Mô tả ngắn gọn từng lỗi nếu có"],\n'
+            '  "bad_scene_indices": [1, 5],\n'
+            '  "summary": "Tóm tắt đánh giá chất lượng hình ảnh trong 1 câu"\n'
+            "}\n"
+            "Lưu ý: `bad_scene_indices` là danh sách `scene_id` (đánh số từ 1) cần tự động vẽ lại ảnh/overlay. "
+            "Chỉ trả `passed: true` và `bad_scene_indices: []` khi toàn bộ hình vẽ sạch, rõ nét, không lỗi."
+        )
 
     vision_data = vertex.review_contact_sheet(
         contact_sheet_path=contact_sheet_path,

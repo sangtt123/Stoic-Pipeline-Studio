@@ -20,6 +20,7 @@ import random
 import re
 import shutil
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Set
@@ -29,6 +30,12 @@ from dotenv import load_dotenv
 import config
 from src.drive_manager import DriveManager
 from src.graphics_2d import render_scene_overlay, render_youtube_thumbnail
+from src.studio_art_engine import (
+    rasterize_svg_to_png,
+    render_studio_shot_svg,
+    render_studio_thumbnail_svg,
+    resolve_studio_theme,
+)
 from src.tts_generator import TTSGenerator
 from src.vertex_client import VertexAIClient
 from src.video_renderer import (
@@ -149,45 +156,95 @@ def _produce_scene_assets(
             {
                 "beat_id": 1,
                 "phrase": scene.get("narration", ""),
+                "caption": scene.get("quote_overlay", ""),
                 "image_prompt": scene["image_prompt"],
             }
         ]
+    active_beats = raw_beats[:4]
 
     beat_images: List[Path] = []
     beat_weights: List[float] = []
+    use_studio_vector = getattr(config, "VIDEO_VISUAL_MODE", "") == "stickman_whiteboard"
 
-    for b_idx, beat in enumerate(raw_beats[:4]):
-        beat_img_path = (
-            image_path if b_idx == 0 else scene_dir / f"scene_{scene_idx:02d}_beat_{b_idx:02d}_art.png"
+    if use_studio_vector:
+        studio_theme = resolve_studio_theme()
+        variation_shift = 1 if regenerate_visual_only else 0
+        blueprints = vertex.direct_studio_scene_beats(
+            narration=scene.get("narration", ""),
+            beats=active_beats,
+            language=config.LANGUAGE,
+            task_name=f"studio_director_s{scene_idx:02d}",
+            variation_shift=variation_shift,
         )
-        unique_seed = random.randint(10_000, 2_147_483_000)
-        prompt = str(beat.get("image_prompt") or scene["image_prompt"]).strip()
-        if regenerate_visual_only:
-            prompt = (
-                f"{prompt}. Fresh uncluttered centered composition, simple iconic 2D shapes, "
-                "strictly zero embedded text or letters, no distorted hands, open clean bottom margin."
+        for b_idx, (beat, bp) in enumerate(zip(active_beats, blueprints)):
+            beat_img_path = (
+                image_path if b_idx == 0 else scene_dir / f"scene_{scene_idx:02d}_beat_{b_idx:02d}_art.png"
             )
+            try:
+                svg_markup = render_studio_shot_svg(
+                    blueprint=bp,
+                    theme=studio_theme,
+                    aspect_ratio=config.ASPECT_RATIO,
+                )
+                rasterize_svg_to_png(
+                    svg_markup=svg_markup,
+                    output_path=beat_img_path,
+                    width=resolution[0],
+                    height=resolution[1],
+                )
+            except Exception as svg_err:
+                logger.warning(
+                    "[STUDIO SVG FALLBACK] Cảnh %d beat #%d rasterize lỗi (%s) -> dùng ảnh vector dự phòng.",
+                    scene_idx + 1,
+                    b_idx + 1,
+                    svg_err,
+                )
+                _render_fallback_scene_art(beat_img_path, resolution)
 
-        try:
-            vertex.generate_image(
-                prompt=prompt,
-                output_path=beat_img_path,
-                aspect_ratio=config.ASPECT_RATIO,
-                seed=unique_seed,
-                task_name=f"imagen_s{scene_idx:02d}_b{b_idx:02d}",
-            )
-        except Exception as img_err:
-            logger.warning(
-                "[IMAGEN FALLBACK] Cảnh %d ảnh #%d không tạo được từ Vertex AI (%s) -> dùng ảnh vector tối giản.",
-                scene_idx + 1,
-                b_idx + 1,
-                img_err,
-            )
-            _render_fallback_scene_art(beat_img_path, resolution)
+            beat_images.append(beat_img_path)
+            phrase_words = max(3, len(str(beat.get("phrase") or "").split()))
+            beat_weights.append(float(phrase_words))
 
-        beat_images.append(beat_img_path)
-        phrase_words = max(3, len(str(beat.get("phrase") or "").split()))
-        beat_weights.append(float(phrase_words))
+        # Nghỉ nhẹ giữa các phân cảnh (chỉ 1 LLM call/cảnh nên rất nhẹ RPM)
+        time.sleep(0.4)
+    else:
+        for b_idx, beat in enumerate(active_beats):
+            beat_img_path = (
+                image_path if b_idx == 0 else scene_dir / f"scene_{scene_idx:02d}_beat_{b_idx:02d}_art.png"
+            )
+            unique_seed = random.randint(10_000, 2_147_483_000)
+            prompt = str(beat.get("image_prompt") or scene["image_prompt"]).strip()
+            if regenerate_visual_only:
+                prompt = (
+                    f"{prompt}. Fresh uncluttered centered composition, simple iconic 2D shapes, "
+                    "strictly zero embedded text or letters, no distorted hands, open clean bottom margin."
+                )
+
+            try:
+                vertex.generate_image(
+                    prompt=prompt,
+                    output_path=beat_img_path,
+                    aspect_ratio=config.ASPECT_RATIO,
+                    seed=unique_seed,
+                    task_name=f"imagen_s{scene_idx:02d}_b{b_idx:02d}",
+                )
+            except Exception as img_err:
+                logger.warning(
+                    "[IMAGEN FALLBACK] Cảnh %d ảnh #%d không tạo được từ Vertex AI (%s) -> dùng ảnh vector tối giản.",
+                    scene_idx + 1,
+                    b_idx + 1,
+                    img_err,
+                )
+                _render_fallback_scene_art(beat_img_path, resolution)
+
+            beat_images.append(beat_img_path)
+            phrase_words = max(3, len(str(beat.get("phrase") or "").split()))
+            beat_weights.append(float(phrase_words))
+
+            # Nhịp nghỉ nhẹ giữa các ảnh liên tiếp để không dồn RPM gây lỗi 429
+            delay_sec = float(getattr(config, "IMAGE_REQUEST_DELAY_SEC", 1.2))
+            if delay_sec > 0:
+                time.sleep(delay_sec)
 
     total_weight = sum(beat_weights) or float(len(beat_images))
     beat_durations = [
@@ -266,7 +323,7 @@ def run_worker(video_index: int) -> None:
 
     logger.info(
         "[PIPELINE BUILD %s] ========== BẮT ĐẦU SẢN XUẤT VIDEO #%d: '%s' (%d cảnh | %s) ==========",
-        getattr(config, "PIPELINE_BUILD", "v3.4"),
+        getattr(config, "PIPELINE_BUILD", "v3.7"),
         video_index,
         script["title"],
         len(scenes),
@@ -353,34 +410,73 @@ def run_worker(video_index: int) -> None:
 
             concatenate_and_mix_bgm(scene_clips, final_local_mp4, bgm_path=bgm_path)
 
-        # Tạo ảnh Thumbnail YouTube 1280x720 đồng bộ màu nền & chủ đề video
+        # Tạo ảnh Thumbnail YouTube 1280x720 đồng bộ 100% phong cách Studio & chủ đề video
         thumb_prompt = (script.get("thumbnail_prompt") or "").strip()
         if not thumb_prompt and scenes:
             thumb_prompt = scenes[0].get("image_prompt", "")
-        try:
-            vertex.generate_image(
-                prompt=(
-                    f"{thumb_prompt}. Bold high-CTR YouTube thumbnail focal artwork, "
-                    "expressive subject, clean uncluttered framing, strictly no embedded text."
-                ),
-                output_path=thumbnail_art_path,
-                aspect_ratio="16:9",
-                seed=random.randint(10_000, 2_147_483_000),
-                task_name=f"imagen_thumbnail_v{video_index}",
-            )
-        except Exception as thumb_err:
-            logger.warning("[THUMBNAIL] Imagen gặp lỗi (%s), dùng ảnh cảnh 1 làm dự phòng.", thumb_err)
-            fallback_art = scene_dir / "scene_00_art.png"
-            if fallback_art.exists():
-                shutil.copy2(fallback_art, thumbnail_art_path)
 
-        render_youtube_thumbnail(
-            art_image_path=thumbnail_art_path,
-            output_path=final_thumbnail_png,
-            headline=script.get("thumbnail_hook") or script["title"],
-            subtitle=script.get("core_quote") or "",
-            folder_number=folder_number,
-        )
+        thumb_headline = (script.get("thumbnail_hook") or script["title"]).strip().upper()
+        thumb_subtitle = (script.get("core_quote") or "").strip()
+
+        if getattr(config, "VIDEO_VISUAL_MODE", "") == "stickman_whiteboard":
+            try:
+                thumb_bp = vertex.direct_studio_thumbnail(
+                    title=script["title"],
+                    hook=thumb_headline,
+                    prompt_hint=thumb_prompt,
+                    task_name=f"studio_thumb_v{video_index}",
+                )
+                is_vi = str(script.get("language", config.LANGUAGE)).startswith("vi")
+                badge_label = f"TẬP #{folder_number:02d}" if is_vi else f"EP #{folder_number:02d}"
+                thumb_svg = render_studio_thumbnail_svg(
+                    headline=thumb_headline,
+                    subtitle=thumb_subtitle,
+                    badge_label=badge_label,
+                    blueprint=thumb_bp,
+                    theme=resolve_studio_theme(),
+                )
+                rasterize_svg_to_png(thumb_svg, final_thumbnail_png, 1280, 720)
+                logger.info("[STUDIO THUMBNAIL] Đã xuất Thumbnail Vector 1280x720: %s", final_thumbnail_png.name)
+            except Exception as thumb_svg_err:
+                logger.warning(
+                    "[STUDIO THUMBNAIL FALLBACK] SVG thumbnail lỗi (%s) -> dùng Pillow thumbnail.",
+                    thumb_svg_err,
+                )
+                fallback_art = scene_dir / "scene_00_art.png"
+                if fallback_art.exists():
+                    shutil.copy2(fallback_art, thumbnail_art_path)
+                render_youtube_thumbnail(
+                    art_image_path=thumbnail_art_path,
+                    output_path=final_thumbnail_png,
+                    headline=thumb_headline,
+                    subtitle=thumb_subtitle,
+                    folder_number=folder_number,
+                )
+        else:
+            try:
+                vertex.generate_image(
+                    prompt=(
+                        f"{thumb_prompt}. Bold high-CTR YouTube thumbnail focal artwork, "
+                        "expressive subject, clean uncluttered framing, strictly no embedded text."
+                    ),
+                    output_path=thumbnail_art_path,
+                    aspect_ratio="16:9",
+                    seed=random.randint(10_000, 2_147_483_000),
+                    task_name=f"imagen_thumbnail_v{video_index}",
+                )
+            except Exception as thumb_err:
+                logger.warning("[THUMBNAIL] Imagen gặp lỗi (%s), dùng ảnh cảnh 1 làm dự phòng.", thumb_err)
+                fallback_art = scene_dir / "scene_00_art.png"
+                if fallback_art.exists():
+                    shutil.copy2(fallback_art, thumbnail_art_path)
+
+            render_youtube_thumbnail(
+                art_image_path=thumbnail_art_path,
+                output_path=final_thumbnail_png,
+                headline=thumb_headline,
+                subtitle=thumb_subtitle,
+                folder_number=folder_number,
+            )
 
         # Gắn tiền tố [CHECK_REQUIRED]_ cho tên video nếu sau 2 lần sửa vẫn chưa đạt chuẩn
         remote_video_name = final_local_mp4.name

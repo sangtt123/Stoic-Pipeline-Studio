@@ -27,6 +27,15 @@ from google.genai import types
 
 import config
 from src.gcp_auth import load_gcp_service_account
+from src.studio_art_engine import (
+    STUDIO_COMPOSITIONS,
+    STUDIO_EXPRESSIONS,
+    STUDIO_OVERLAYS,
+    STUDIO_POSES,
+    STUDIO_PROPS,
+    StudioShotBlueprint,
+    normalize_studio_blueprint,
+)
 
 logger = logging.getLogger("vertex_client")
 T = TypeVar("T")
@@ -839,6 +848,171 @@ class VertexAIClient:
             model_chain=config.TTS_FALLBACK_MODELS,
             caller=_call,
         )
+
+    def direct_studio_scene_beats(
+        self,
+        narration: str,
+        beats: List[Dict[str, Any]],
+        language: Optional[str] = None,
+        task_name: str = "studio_art_director",
+        variation_shift: int = 0,
+    ) -> List[StudioShotBlueprint]:
+        """
+        Chỉ 1 lần gọi LLM JSON nhẹ cho mỗi phân cảnh (thay vì 3–4 lần tạo ảnh raster nặng),
+        đạo diễn toàn bộ visual_beats theo chuẩn Studio Explainer (khớp 100% Web Studio Local).
+        Tự động dự phòng thông minh bằng bộ phân tích ngữ nghĩa nếu LLM lỗi/quá tải.
+        """
+        active_beats = beats[:4]
+        if not active_beats:
+            return []
+
+        lang = language or config.LANGUAGE
+        is_vietnamese = str(lang).startswith("vi")
+        beats_spec = "\n".join(
+            f"Shot #{idx + 1} (beat_id={b.get('beat_id') or (idx + 1)}):\n"
+            f'  - Spoken phrase: "{re.sub(r"[&<>]", " ", str(b.get("phrase") or ""))}"\n'
+            f'  - Short caption: "{re.sub(r"[&<>]", " ", str(b.get("caption") or b.get("short_label") or ""))}"\n'
+            f'  - Visual cue: {str(b.get("image_prompt") or b.get("phrase") or "")[:180]}'
+            for idx, b in enumerate(active_beats)
+        )
+
+        regen_note = (
+            f"\nREGENERATE REQUEST: Pick fresh alternative compositions & visual metaphors (shift #{variation_shift})."
+            if variation_shift > 0
+            else ""
+        )
+
+        director_prompt = (
+            "You are the Lead Visual Storyboard Director for a clean Editorial Explainer YouTube channel.\n"
+            f"Direct {len(active_beats)} COMPLETELY DISTINCT visual shots matching each spoken phrase below.\n"
+            "Every consecutive shot MUST use a DIFFERENT composition and a DIFFERENT primary_prop "
+            "so rapid 3-second cuts look dynamic and directly match each clause!\n\n"
+            f"Full Scene Narration: {str(narration or '')[:320]}{regen_note}\n\n"
+            "SHOTS TO DIRECT:\n"
+            f"{beats_spec}\n\n"
+            "ALLOWED ENUM VALUES (PICK EXACT STRINGS ONLY):\n"
+            f"- composition: {' | '.join(STUDIO_COMPOSITIONS)}\n"
+            f"- character_pose: {' | '.join(STUDIO_POSES)}\n"
+            f"- character_expression: {' | '.join(STUDIO_EXPRESSIONS)}\n"
+            f"- secondary_pose (when composition='two_characters_interaction'): {' | '.join(STUDIO_POSES)}\n"
+            f"- secondary_expression: {' | '.join(STUDIO_EXPRESSIONS)}\n"
+            f"- primary_prop: {' | '.join(STUDIO_PROPS)}\n"
+            f"- secondary_prop (optional for cause_effect_flow): {' | '.join(STUDIO_PROPS)}\n"
+            f"- overlay_effect: {' | '.join(STUDIO_OVERLAYS)}\n\n"
+            "EXACT STORYTELLING EXAMPLES:\n"
+            '- "khi bị chê bai" -> composition="two_characters_interaction", secondary_pose="pointing_accuse", secondary_expression="angry", character_pose="standing_calm", character_expression="calm", primary_prop="criticism_arrows", overlay_effect="none"\n'
+            '- "thay vì đau khổ" -> composition="character_left_prop_right", character_pose="slumped_sad", character_expression="sad", primary_prop="storm_cloud", overlay_effect="big_x_crossout"\n'
+            '- "luồng gió thổi qua hòn đá tảng" -> composition="center_metaphor", primary_prop="boulder_wind", overlay_effect="shield_aura"\n'
+            '- "tâm trí vững vàng của bạn" -> composition="character_on_pedestal", character_pose="shield_stance", character_expression="confident", primary_prop="mind_shield", overlay_effect="checkmark_badge"\n\n'
+            f'Keep every "caption" crisp (2-5 {"Vietnamese" if is_vietnamese else "English"} words matching the short caption).\n'
+            f'Return STRICT JSON: {{"beats": [ {{ "beat_id": 1, "composition": "...", "character_pose": "...", '
+            '"character_expression": "...", "secondary_pose": "...", "secondary_expression": "...", '
+            '"primary_prop": "...", "secondary_prop": "...", "overlay_effect": "...", '
+            '"caption": "...", "left_badge": "...", "right_badge": "...", "step_items": [] }} ]}} '
+            f"with EXACTLY {len(active_beats)} items."
+        )
+
+        directed_beats: List[Dict[str, Any]] = []
+        try:
+            parsed = self.generate_json(
+                prompt=director_prompt,
+                system_instruction=(
+                    f"You are a precision Visual Storyboard Art Director. Output strictly valid JSON with "
+                    f"EXACTLY {len(active_beats)} diverse, expressive visual shot blueprints using ONLY the allowed enum names."
+                ),
+                temperature=0.45,
+                task_name=task_name,
+            )
+            raw_list = parsed.get("beats") if isinstance(parsed, dict) else None
+            if isinstance(raw_list, list):
+                directed_beats = [x for x in raw_list if isinstance(x, dict)]
+        except Exception as dir_err:
+            logger.warning(
+                "[STUDIO DIRECTOR FALLBACK] Task='%s' chuyển sang bộ phân tích ngữ nghĩa (%s).",
+                task_name,
+                dir_err,
+            )
+
+        used_compositions: set[str] = set()
+        used_props: set[str] = set()
+        results: List[StudioShotBlueprint] = []
+        total_beats = len(active_beats)
+
+        for idx, beat in enumerate(active_beats):
+            beat_id = int(beat.get("beat_id") or (idx + 1))
+            candidate = next(
+                (item for item in directed_beats if item.get("beat_id") == beat_id),
+                directed_beats[idx] if idx < len(directed_beats) else None,
+            )
+            short_label = str(beat.get("caption") or beat.get("short_label") or "").strip()
+            bp = normalize_studio_blueprint(
+                raw=candidate,
+                phrase=str(beat.get("phrase") or "").strip(),
+                short_label=short_label,
+                image_prompt=str(beat.get("image_prompt") or "").strip(),
+                chapter_header=None,
+                beat_index=idx,
+                total_beats=total_beats,
+            )
+            if bp.composition in used_compositions and bp.primary_prop in used_props:
+                alt_comp = next((c for c in STUDIO_COMPOSITIONS if c not in used_compositions), None)
+                if alt_comp:
+                    bp.composition = alt_comp
+            if variation_shift > 0 and idx == 0 and not candidate:
+                bp.composition = STUDIO_COMPOSITIONS[(STUDIO_COMPOSITIONS.index(bp.composition) + variation_shift) % len(STUDIO_COMPOSITIONS)]
+
+            used_compositions.add(bp.composition)
+            used_props.add(bp.primary_prop)
+            results.append(bp)
+
+        return results
+
+    def direct_studio_thumbnail(
+        self,
+        title: str,
+        hook: str,
+        prompt_hint: str = "",
+        task_name: str = "studio_thumb_director",
+    ) -> StudioShotBlueprint:
+        """Đạo diễn tư thế nhân vật, biểu cảm và ẩn dụ trọng tâm cho Thumbnail 1280x720 chuẩn Studio."""
+        director_prompt = (
+            "Pick the highest-CTR character pose, facial expression, focal visual metaphor prop, and accent overlay "
+            "for a 1280x720 YouTube Explainer Thumbnail.\n"
+            f"Title: {title}\n"
+            f"Headline: {hook}\n"
+            f"Visual Idea: {prompt_hint or title}\n\n"
+            f"Allowed character_pose: {' | '.join(STUDIO_POSES)}\n"
+            f"Allowed character_expression: {' | '.join(STUDIO_EXPRESSIONS)}\n"
+            f"Allowed primary_prop: {' | '.join(STUDIO_PROPS)}\n"
+            f"Allowed overlay_effect: {' | '.join(STUDIO_OVERLAYS)}\n\n"
+            'Return strictly JSON: {"character_pose": "...", "character_expression": "...", '
+            '"primary_prop": "...", "overlay_effect": "..."}'
+        )
+
+        candidate: Optional[Dict[str, Any]] = None
+        try:
+            candidate = self.generate_json(
+                prompt=director_prompt,
+                system_instruction="Return strictly valid JSON selecting exact enum names for a high-CTR YouTube thumbnail.",
+                temperature=0.35,
+                task_name=task_name,
+            )
+        except Exception as err:
+            logger.warning(
+                "[STUDIO THUMB FALLBACK] Task='%s' dùng bộ phân tích ngữ nghĩa (%s).",
+                task_name,
+                err,
+            )
+
+        bp = normalize_studio_blueprint(
+            raw=candidate,
+            phrase=title,
+            short_label=hook,
+            image_prompt=prompt_hint or title,
+        )
+        if bp.overlay_effect == "none":
+            bp.overlay_effect = "spark_emphasis"
+        return bp
 
     def embed_text(self, text: str, task_name: str = "text_embedding") -> List[float]:
         """Tạo vector embedding bằng chuỗi EMBEDDING_FALLBACK_MODELS để so sánh độ tương đồng ngữ nghĩa."""

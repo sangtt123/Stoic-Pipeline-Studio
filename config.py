@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
 
-PIPELINE_BUILD: str = "v3.5"
+PIPELINE_BUILD: str = "v3.7"
 
 # ==============================================================================
 # 1. CẤU HÌNH CÁ NHÂN (Tùy chỉnh trước khi chạy)
@@ -113,6 +113,7 @@ MUSIC_FALLBACK_MODELS: List[str] = [
 # Exponential Backoff + Jitter cho lỗi nhất thời (429 / 503): 10s -> 20s -> 40s
 BACKOFF_DELAYS_SECONDS: Tuple[int, ...] = (10, 20, 40)
 BACKOFF_JITTER_MAX_SECONDS: float = 3.5
+IMAGE_REQUEST_DELAY_SEC: float = float(os.getenv("IMAGE_REQUEST_DELAY_SEC", "1.2"))
 
 
 # ==============================================================================
