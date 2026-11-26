@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
 
-PIPELINE_BUILD: str = "v3.10"
+PIPELINE_BUILD: str = "v3.11"
 
 # ==============================================================================
 # 1. CẤU HÌNH CÁ NHÂN (Tùy chỉnh trước khi chạy)
@@ -36,7 +36,7 @@ VISUAL_STYLE_PROMPT: str = (
 # - "pen_sketch": Cây bút chuyển động vẽ nét phác họa rồi đổ bóng hiện hình
 VIDEO_VISUAL_MODE: str = os.getenv("VIDEO_VISUAL_MODE", "stickman_whiteboard")
 STUDIO_CHARACTER_STYLE: str = os.getenv("STUDIO_CHARACTER_STYLE", "owl_philosopher")
-VIDEO_PLAYBACK_SPEED: float = float(os.getenv("VIDEO_PLAYBACK_SPEED", "1.25"))
+VIDEO_PLAYBACK_SPEED: float = float(os.getenv("VIDEO_PLAYBACK_SPEED", "1.05"))
 WHITEBOARD_BG_COLOR: str = os.getenv("WHITEBOARD_BG_COLOR", "#EEF2F7")
 WHITEBOARD_INK_COLOR: str = os.getenv("WHITEBOARD_INK_COLOR", "#0F172A")
 WHITEBOARD_ACCENT_COLOR: str = os.getenv("WHITEBOARD_ACCENT_COLOR", "#2563EB")
@@ -184,13 +184,13 @@ NARRATIVE_HOOKS: List[str] = [
 SCENES_MIN: int = 22
 SCENES_MAX: int = 26
 # Số lượng ảnh minh họa theo từng vế câu (visual_beats) trong MỖI phân cảnh:
-# 24 cảnh × 3–4 ảnh/cảnh = ~72–96 ảnh khác nhau cho video 5 phút (~3–4 giây/ảnh ở tốc độ 1.25x)
+# 24 cảnh × 3–4 ảnh/cảnh = ~72–96 ảnh khác nhau cho video 5 phút (~3–4 giây/ảnh ở tốc độ 1.05x điềm tĩnh)
 BEATS_PER_SCENE_MIN: int = 3
 BEATS_PER_SCENE_MAX: int = 4
 
 TARGET_WORD_COUNT: Dict[str, Tuple[int, int]] = {
-    "en-US": (880, 980),
-    "vi-VN": (1200, 1360),
+    "en-US": (760, 860),
+    "vi-VN": (1050, 1200),
 }
 
 CRITIC_MIN_SCORE: float = 7.5

@@ -37,13 +37,18 @@ from src.studio_art_engine import (
     resolve_studio_theme,
 )
 from src.studio_motion_renderer import (
+    align_beat_bounds_to_audio_silences,
     build_motion_theme_style,
+    extract_audio_energy_envelope,
+    reconcile_visual_beats_to_narration,
     render_motion_beat_scene_clip,
+    schedule_scene_speech_and_beats,
 )
 from src.tts_generator import TTSGenerator
 from src.vertex_client import VertexAIClient
 from src.video_renderer import (
     concatenate_and_mix_bgm,
+    ensure_ambient_bgm,
     pick_random_bgm,
     render_multi_beat_scene_clip,
     render_scene_clip,
@@ -167,7 +172,13 @@ def _produce_scene_assets(
                 "image_prompt": scene["image_prompt"],
             }
         ]
-    active_beats = raw_beats[:4]
+    active_beats = [dict(b) for b in raw_beats[:4]]
+    scene_narration_str = str(scene.get("narration") or "").strip()
+    if scene_narration_str and active_beats:
+        reconciled_phrases = reconcile_visual_beats_to_narration(scene_narration_str, active_beats)
+        for b_item, r_phrase in zip(active_beats, reconciled_phrases):
+            if r_phrase:
+                b_item["phrase"] = r_phrase
 
     beat_images: List[Path] = []
     beat_svgs: List[str | None] = []
@@ -184,6 +195,7 @@ def _produce_scene_assets(
             language=config.LANGUAGE,
             task_name=f"studio_director_s{scene_idx:02d}",
             variation_shift=variation_shift,
+            chapter_header=str(scene.get("chapter_header") or "").strip() or None,
         )
         for b_idx, (beat, bp) in enumerate(zip(active_beats, blueprints)):
             beat_img_path = (
@@ -263,13 +275,35 @@ def _produce_scene_assets(
             if delay_sec > 0:
                 time.sleep(delay_sec)
 
-    total_weight = sum(beat_weights) or float(len(beat_images))
-    beat_durations = [
-        max(1.4, round(duration_sec * (w / total_weight), 3)) for w in beat_weights
-    ]
-    # Chuẩn hóa lại tổng thời lượng các ảnh con bằng đúng duration_sec
-    scale_factor = duration_sec / max(0.1, sum(beat_durations))
-    beat_durations = [round(d * scale_factor, 3) for d in beat_durations]
+    try:
+        scene_env = extract_audio_energy_envelope(audio_path, samples_per_sec=30)
+    except Exception:
+        scene_env = None
+
+    scene_narration_for_sync = str(scene.get("narration") or "").strip()
+    if scene_narration_for_sync and beat_phrases:
+        beat_phrases, synced_beat_durs, beat_word_ranges = schedule_scene_speech_and_beats(
+            narration=scene_narration_for_sync,
+            beat_phrases=beat_phrases,
+            energy_envelope=scene_env,
+            audio_duration_sec=duration_sec,
+            trailing_gap_sec=0.0,
+            samples_per_sec=30,
+        )
+        beat_durations = [round(d, 3) for d in synced_beat_durs]
+    else:
+        beat_word_ranges = None
+        beat_durations = align_beat_bounds_to_audio_silences(
+            weights=beat_weights,
+            energy_envelope=scene_env,
+            duration_sec=duration_sec,
+            samples_per_sec=30,
+        )
+        beat_durations = [round(d, 3) for d in beat_durations]
+
+    if beat_durations:
+        diff = round(duration_sec - sum(beat_durations), 3)
+        beat_durations[-1] = max(0.35, round(beat_durations[-1] + diff, 3))
 
     scene["_beat_count"] = len(beat_images)
     scene["_last_beat_svg"] = beat_svgs[-1] if beat_svgs else None
@@ -298,6 +332,7 @@ def _produce_scene_assets(
                 cached_full_pngs=beat_images,
                 theme=motion_theme,
                 beat_phrases=beat_phrases,
+                scene_narration=scene_narration_for_sync,
             )
             return clip_path, duration_sec
         except Exception as motion_err:
@@ -376,7 +411,7 @@ def run_worker(video_index: int) -> None:
 
     logger.info(
         "[PIPELINE BUILD %s] ========== BẮT ĐẦU SẢN XUẤT VIDEO #%d: '%s' (%d cảnh | %s) ==========",
-        getattr(config, "PIPELINE_BUILD", "v3.10"),
+        getattr(config, "PIPELINE_BUILD", "v3.11"),
         video_index,
         script["title"],
         len(scenes),
@@ -385,7 +420,7 @@ def run_worker(video_index: int) -> None:
 
     try:
         scene_clips: List[Path] = []
-        bgm_path = pick_random_bgm()
+        bgm_path = pick_random_bgm() or ensure_ambient_bgm(workdir)
 
         # Xác định số thứ tự & tên thư mục Google Drive theo chủ đề video (bắt đầu từ 1, nối tiếp số hiện có trên Drive)
         folder_number = script.get("folder_number")

@@ -1,30 +1,26 @@
 """
-src/studio_motion_renderer.py — Động cơ hoạt ảnh Motion Graphics đa lớp 30fps (1:1 với Local Studio).
+src/studio_motion_renderer.py — Động cơ hoạt ảnh Motion Graphics đa lớp 30fps (v3.11 — 1:1 với Local Studio).
 
 Đồng bộ hoàn toàn toàn bộ hiệu ứng cao cấp từ trình duyệt Local (`studioMotionRenderer.ts`) sang
 môi trường render CPU GitHub Actions Ubuntu:
 1. Tách mỗi Studio SVG thành 5 lớp trong suốt độc lập (`stage`, `beat-1`, `beat-2`, `beat-3`,
-   `studio-caption`) + bản `full` cho hiệu ứng chuyển cảnh.
+   `studio-caption`) + bản `full` cho hiệu ứng hòa tan chuyển nhịp êm dịu.
 2. Rasterize mỗi lớp đúng 1 lần duy nhất bằng `rsvg-convert` (hoặc `cairosvg`) và cắt vùng biên
-   chứa pixel thực (Tight Alpha Bounding Box) + Premultiplied Alpha để ghép xoay/scale tốc độ cao
-   không viền tối, chạy mượt 30fps trên runner Ubuntu 2–4 vCPU.
-3. Phụ đề chạy chữ từng từ theo giọng đọc thật ("đọc chừng nào hiện chữ chừng ấy"):
-   - Bỏ chữ label tĩnh trong `#studio-caption`, giữ nguyên khung thẻ bo góc + thanh nhấn trái.
-   - Bố cục sẵn từng trang 2 dòng cân giữa (tránh nhảy dòng/lệch ngang) và pre-render từng từ một lần.
-   - Khi giọng đọc chạm tới từ nào mới cho hiện từ đó, tô sáng nhẹ từ đang đọc và chuyển mượt sang màu mực.
-4. Diễn hoạt vật lý từng lớp theo công thức chuẩn Local (`easeOutBack`, `easeOutQuart`, `easeInOutSine`):
-   - Hạt không khí hình học (12 hạt tròn & vuông xoay) trôi nhẹ phía sau nền studio.
-   - Chuyển cảnh trượt ngang có hướng (`Directional Slide-Fade`) mượt trong 14% đầu mỗi beat.
-   - 5 quỹ đạo camera điện ảnh luân phiên theo chỉ số beat (`Push-in`, `Pull-out`, `Pan Right`, `Pan Left`, `Hero Zoom`).
-   - Nhân vật chính (`beat-1`) bật lò xo + nhịp thở + nghiêng đầu + nhún nhẹ theo âm lượng giọng nói thật.
-   - Lớp nhấn (`beat-2`: mũi tên / dấu X / hào quang) nảy trễ + đập nhịp theo thanh giọng nói.
-   - Đạo cụ / nhân vật đối diện (`beat-3`) trượt parallax 2.5D ngược pha.
-   - Thanh sóng âm 7 cột góc trên trái nhảy khớp 100% đường bao RMS 30Hz trích từ giọng đọc thật.
-   - Thanh tiến trình tổng thể siêu mảnh sát mép dưới xuyên suốt toàn bộ video.
+   chứa pixel thực (Tight Alpha Bounding Box) + Premultiplied Alpha để ghép tốc độ cao không viền tối.
+3. Phụ đề chạy chữ từng từ khóa chặt theo năng lượng giọng đọc thật (`voice-activity locked`):
+   - Tự chậm lại/dừng theo hơi thở và khoảng nghỉ thực tế trong đường bao RMS 30Hz.
+   - Hộp phụ đề giữ vững phương ngang, hiển thị tối đa 2 dòng cân giữa.
+4. Diễn hoạt điềm tĩnh chuẩn mực biên tập (`v3.11`):
+   - Khung sân khấu bên ngoài (`stage`) đứng vững 100%, chỉ chuyển cảnh hòa tan dịu 0.12s.
+   - Các lớp nội dung (`beat-1`, `beat-2`, `beat-3`) tiến vào mượt mà bằng `easeOutCubic`/`easeOutQuart`,
+     không giật lò xo overshoot, không xoay lắc đầu hay nhấp nháy rung liên hồi.
+   - 5 hạt không khí tròn nhẹ nhàng phía sau; bỏ huy hiệu sóng âm 7 cột gây xao nhãng.
+   - Tự động căn điểm cắt giữa các beat vào đúng khoảng lặng tự nhiên của giọng đọc (`align_beat_bounds_to_audio_silences`).
 """
 
 from __future__ import annotations
 
+import bisect
 import copy
 import functools
 import logging
@@ -531,38 +527,401 @@ def _crop_to_premul_layer(bgra: Optional[np.ndarray], offset_x: int = 0, offset_
 
 
 # ==============================================================================
-# BỘ DỰNG PHỤ ĐỀ CHẠY CHỮ TỪNG TỪ THEO GIỌNG ĐỌC (WORD-BY-WORD SUBTITLE ENGINE)
+# BỘ DỰNG PHỤ ĐỀ & CĂN ĐIỂM CẮT BEAT KHỚP GIỌNG ĐỌC (VOICE-ACTIVITY LOCKED)
 # ==============================================================================
 
 
-def compute_word_speech_schedule(words: List[str]) -> List[Tuple[float, float]]:
+def align_beat_bounds_to_audio_silences(
+    weights: List[float],
+    energy_envelope: Optional[List[float]],
+    duration_sec: float,
+    samples_per_sec: int = 30,
+) -> List[float]:
     """
-    Tính dải tiến trình `[start_p, end_p]` (trong `[0.02, 0.92]`) cho từng từ dựa theo
-    độ dài từ + dấu ngắt câu (`, ; : . ? !`) để nhịp hiện chữ sát giọng đọc nhất.
+    Tự động căn ranh giới chuyển beat vào các khoảng lặng tự nhiên của giọng đọc
+    (silence valleys ±0.65s) để hình ảnh không bao giờ cắt đột ngột giữa âm tiết đang nói.
+    Trả về danh sách thời lượng từng beat `[d0, d1, ...]` có tổng đúng bằng `duration_sec`.
+    """
+    n = len(weights)
+    if n <= 0:
+        return [max(0.4, float(duration_sec))]
+    if n == 1 or duration_sec <= 0.1:
+        return [max(0.4, float(duration_sec))]
+
+    safe_w = [max(1.0, float(w or 1.0)) for w in weights]
+    total_w = sum(safe_w) or float(n)
+    prop_times: List[float] = []
+    acc = 0.0
+    for k in range(n - 1):
+        acc += safe_w[k]
+        prop_times.append((acc / total_w) * duration_sec)
+
+    if not energy_envelope or len(energy_envelope) < 10 or duration_sec < 2.2:
+        cuts = [0.0, *prop_times, duration_sec]
+        return [max(0.35, cuts[i + 1] - cuts[i]) for i in range(n)]
+
+    min_beat_dur = min(1.1, (duration_sec / n) * 0.55)
+    cuts_sec: List[float] = [0.0]
+    prev_cut = 0.0
+
+    for k in range(n - 1):
+        target_t = prop_times[k]
+        low_bound = prev_cut + min_beat_dur
+        high_bound = duration_sec - (n - 1 - k) * min_beat_dur
+        if high_bound <= low_bound:
+            fallback_cut = max(prev_cut + 0.25, min(duration_sec - 0.25, target_t))
+            cuts_sec.append(fallback_cut)
+            prev_cut = fallback_cut
+            continue
+
+        target_idx = int(round(target_t * samples_per_sec))
+        win_radius = max(2, int(round(min(0.65, (duration_sec / n) * 0.35) * samples_per_sec)))
+        idx_start = max(int(math.ceil(low_bound * samples_per_sec)), target_idx - win_radius)
+        idx_end = min(int(math.floor(high_bound * samples_per_sec)), target_idx + win_radius)
+
+        best_idx = max(idx_start, min(idx_end, target_idx))
+        best_score = -1e9
+        env_len = len(energy_envelope)
+        for idx in range(idx_start, idx_end + 1):
+            w0 = max(0, idx - 2)
+            w1 = min(env_len - 1, idx + 2)
+            if w1 >= w0:
+                local_mean = sum(energy_envelope[w0 : w1 + 1]) / float(w1 - w0 + 1)
+            else:
+                local_mean = 0.25
+            dist_penalty = 0.08 * (abs(idx - target_idx) / float(max(1, win_radius)))
+            score = 1.0 - local_mean - dist_penalty
+            if score > best_score:
+                best_score = score
+                best_idx = idx
+
+        snapped = max(low_bound, min(high_bound, best_idx / float(samples_per_sec)))
+        cuts_sec.append(snapped)
+        prev_cut = snapped
+
+    cuts_sec.append(duration_sec)
+    durs = [max(0.35, cuts_sec[i + 1] - cuts_sec[i]) for i in range(n)]
+    scale = duration_sec / max(0.1, sum(durs))
+    return [d * scale for d in durs]
+
+
+def _normalize_token_for_match(token: str) -> str:
+    return re.sub(
+        r"""^[.,!?;:"'()\[\]…—–\-«»“”‘’]+|[.,!?;:"'()\[\]…—–\-«»“”‘’]+$""",
+        "",
+        token.lower(),
+    )
+
+
+def reconcile_visual_beats_to_narration(
+    narration: str,
+    beats: List[Dict[str, Any]] | List[str],
+) -> List[str]:
+    """
+    Chuẩn hóa danh sách cụm `phrase` của các visual_beats thành phân hoạch LIỀN MẠCH 100%
+    của toàn bộ lời thoại `narration` (không thiếu từ, không bỏ sót liên từ, giữ nguyên dấu câu).
+    """
+    clean_nar = re.sub(r"\s+", " ", (narration or "").strip())
+    k = len(beats)
+    if k <= 0:
+        return []
+
+    def _raw_phrase(b: Any) -> str:
+        if isinstance(b, str):
+            return b.strip()
+        if isinstance(b, dict):
+            return str(b.get("phrase") or "").strip()
+        return ""
+
+    if not clean_nar:
+        return [_raw_phrase(b) for b in beats]
+
+    words = [w for w in clean_nar.split(" ") if w]
+    n = len(words)
+    if k == 1 or n <= k:
+        if k == 1:
+            return [clean_nar]
+        out: List[str] = []
+        for i in range(k):
+            s = (i * n) // k
+            e = ((i + 1) * n) // k
+            piece = " ".join(words[s:max(s, e)])
+            out.append(piece if piece else (words[min(n - 1, i)] if words else ""))
+        return out
+
+    norm_nar = [_normalize_token_for_match(w) for w in words]
+    beat_norm_words = [
+        [_normalize_token_for_match(t) for t in re.split(r"\s+", _raw_phrase(b)) if _normalize_token_for_match(t)]
+        for b in beats
+    ]
+
+    splits: List[int] = [0]
+    matched_count = 0
+    cursor = 1
+
+    for b in range(1, k):
+        bw = beat_norm_words[b]
+        min_idx = cursor
+        max_idx = n - (k - b)
+        found_idx = -1
+
+        if bw and max_idx >= min_idx:
+            for len_try in range(min(2, len(bw)), 0, -1):
+                if found_idx >= 0:
+                    break
+                for idx in range(min_idx, max_idx + 1):
+                    if idx + len_try <= n and all(norm_nar[idx + j] == bw[j] for j in range(len_try)):
+                        found_idx = idx
+                        break
+
+        if found_idx >= min_idx:
+            splits.append(found_idx)
+            cursor = found_idx + 1
+            matched_count += 1
+        else:
+            splits.append(-1)
+            cursor = min(max_idx + 1, cursor + 1)
+
+    splits.append(n)
+    valid_match_ratio = 1.0 if k <= 1 else (matched_count / float(k - 1))
+    if valid_match_ratio >= 0.5:
+        for b in range(1, k):
+            if splits[b] >= 0:
+                continue
+            next_known_b = b + 1
+            while next_known_b < k and splits[next_known_b] < 0:
+                next_known_b += 1
+            prev_bound = splits[b - 1]
+            next_bound = splits[next_known_b]
+            gap_beats = next_known_b - (b - 1)
+            raw_target = int(round(prev_bound + ((next_bound - prev_bound) * 1.0) / gap_beats))
+            splits[b] = max(prev_bound + 1, min(next_bound - (k - b), raw_target))
+
+        out_phrases: List[str] = []
+        all_valid = True
+        for b in range(k):
+            s = splits[b]
+            e = splits[b + 1]
+            if e <= s:
+                all_valid = False
+                break
+            out_phrases.append(" ".join(words[s:e]))
+        if all_valid and sum(len(p.split()) for p in out_phrases) == n:
+            return out_phrases
+
+    hint_weights = [max(2, len(_raw_phrase(b).split())) for b in beats]
+    total_hint_w = sum(hint_weights) or k
+    fallback_splits: List[int] = [0]
+    acc_w = 0
+    prev_cut = 0
+    for b in range(k - 1):
+        acc_w += hint_weights[b]
+        target = int(round((acc_w / float(total_hint_w)) * n))
+        low = prev_cut + 1
+        high = n - (k - 1 - b)
+        best = max(low, min(high, target))
+        best_score = -1e9
+        for cand in range(max(low, best - 3), min(high, best + 3) + 1):
+            prev_tok = words[cand - 1] if cand > 0 else ""
+            punct_bonus = 4.0 if prev_tok.endswith((".", "?", "!", "…")) else (2.5 if prev_tok.endswith((",", ";", ":")) else 0.0)
+            score = punct_bonus - abs(cand - target) * 0.65
+            if score > best_score:
+                best_score = score
+                best = cand
+        fallback_splits.append(best)
+        prev_cut = best
+    fallback_splits.append(n)
+
+    return [" ".join(words[fallback_splits[b] : fallback_splits[b + 1]]) for b in range(k)]
+
+
+def _compute_speech_token_weight(word: str) -> float:
+    clean = re.sub(r"""[.,!?;:"'()\[\]…—–-]""", "", word)
+    clen = len(clean)
+    syllable_est = 1.55 + min(9, clen) * 0.28 + max(0, clen - 6) * 0.14
+    punct_pause = 0.0
+    if word.endswith((",", ";", ":")):
+        punct_pause = 1.15
+    elif word.endswith((".", "?", "!", "…")):
+        punct_pause = 2.0
+    return syllable_est + punct_pause
+
+
+def compute_word_speech_schedule(
+    words: List[str],
+    energy_envelope: Optional[List[float]] = None,
+    audio_duration_sec: Optional[float] = None,
+    total_duration_sec: Optional[float] = None,
+) -> List[Tuple[float, float]]:
+    """
+    Tính dải tiến trình `[start_p, end_p]` cho từng từ dựa theo trọng số âm tiết cân bằng +
+    dấu ngắt câu + đường bao giọng đọc 30Hz (tự nhận diện vùng bắt đầu/kết thúc âm thanh thật,
+    loại bỏ khoảng lặng đầu/cuối/padding và chậm lại tại khoảng thở giữa câu).
     """
     if not words:
         return []
-    weights: List[float] = []
-    for w in words:
-        clean = re.sub(r"""[.,!?;:"'()\[\]…—–-]""", "", w)
-        punct_pause = 0.0
-        if w.endswith((",", ";", ":")):
-            punct_pause = 1.3
-        elif w.endswith((".", "?", "!", "…")):
-            punct_pause = 2.1
-        weights.append(max(2.2, len(clean) * 0.72 + punct_pause))
-
+    weights = [_compute_speech_token_weight(w) for w in words]
     total_w = sum(weights) or float(len(words))
-    speak_start = 0.02
-    speak_span = 0.90
+
+    has_ratio = (
+        audio_duration_sec is not None
+        and audio_duration_sec > 0.1
+        and total_duration_sec is not None
+        and total_duration_sec >= audio_duration_sec
+    )
+    audio_frac = min(1.0, float(audio_duration_sec) / float(total_duration_sec)) if has_ratio else 1.0
+
+    active_start_frac = 0.005 * audio_frac
+    active_end_frac = (0.985 if has_ratio else 0.96) * audio_frac
+    cdf: Optional[List[float]] = None
+
+    if energy_envelope and len(energy_envelope) >= 6:
+        m = len(energy_envelope)
+        first_active = -1
+        last_active = -1
+        for i, val in enumerate(energy_envelope):
+            if float(val) >= 0.085:
+                if first_active < 0:
+                    first_active = i
+                last_active = i
+        if first_active >= 0 and last_active > first_active + 1:
+            a0 = max(0, first_active - 1)
+            a1 = min(m - 1, last_active + 2)
+            active_start_frac = (a0 / float(m)) * audio_frac
+            active_end_frac = ((a1 + 1) / float(m)) * audio_frac
+
+            sub_len = a1 - a0 + 1
+            cdf = [0.0] * (sub_len + 1)
+            for i in range(sub_len):
+                e = _clamp01(float(energy_envelope[a0 + i]))
+                act = 0.06 if e < 0.075 else (0.50 + e * 1.05)
+                cdf[i + 1] = cdf[i] + act
+            total_act = cdf[sub_len] or 1.0
+            for i in range(sub_len + 1):
+                cdf[i] /= total_act
+
+    speak_span = max(0.05, active_end_frac - active_start_frac)
+
+    def _map_u(u_raw: float) -> float:
+        u = _clamp01(u_raw)
+        if not cdf:
+            return active_start_frac + u * speak_span
+        m = len(cdf) - 1
+        lo = bisect.bisect_right(cdf, u) - 1
+        lo = max(0, min(m - 1, lo))
+        span = max(1e-6, cdf[lo + 1] - cdf[lo])
+        frac = _clamp01((u - cdf[lo]) / span)
+        t_norm = (lo + frac) / float(m)
+        return active_start_frac + t_norm * speak_span
+
     schedule: List[Tuple[float, float]] = []
     acc = 0.0
     for wt in weights:
-        s = speak_start + (acc / total_w) * speak_span
+        s = _map_u(acc / total_w)
         acc += wt
-        e = speak_start + (acc / total_w) * speak_span
+        e = max(s + 0.004, _map_u(acc / total_w))
         schedule.append((s, e))
     return schedule
+
+
+def schedule_scene_speech_and_beats(
+    narration: str,
+    beat_phrases: List[str],
+    energy_envelope: Optional[List[float]],
+    audio_duration_sec: float,
+    trailing_gap_sec: float = 0.0,
+    samples_per_sec: int = 30,
+) -> Tuple[List[str], List[float], List[List[Tuple[float, float]]]]:
+    """
+    Đồng bộ toàn bộ các beat & phụ đề của 1 cảnh trực tiếp trên trục thời gian âm thanh thực tế:
+    1. Phân hoạch 100% `narration` (không bỏ sót từ nào) vào các beat.
+    2. Định lịch từng từ trên toàn `audio_duration_sec` (đã tách riêng khỏi `trailing_gap_sec`).
+    3. Đặt ranh giới cắt beat tại khoảng nghỉ giữa từ cuối beat k và từ đầu beat k+1.
+    Trả về `(reconciled_phrases, beat_durations_with_trailing, beat_word_ranges)`.
+    """
+    total_render_dur = max(0.2, float(audio_duration_sec) + max(0.0, float(trailing_gap_sec)))
+    reconciled = reconcile_visual_beats_to_narration(narration, beat_phrases)
+
+    full_words: List[str] = []
+    beat_slices: List[Tuple[int, int]] = []
+    for ph in reconciled:
+        w_list = [w for w in re.split(r"\s+", ph.strip()) if w]
+        s_w = len(full_words)
+        full_words.extend(w_list)
+        beat_slices.append((s_w, len(full_words)))
+
+    k = max(1, len(beat_slices))
+    if not full_words:
+        eq = total_render_dur / float(k)
+        return reconciled, [eq] * k, [[] for _ in range(k)]
+
+    full_norm = compute_word_speech_schedule(
+        full_words,
+        energy_envelope=energy_envelope,
+        audio_duration_sec=audio_duration_sec,
+        total_duration_sec=audio_duration_sec,
+    )
+    word_times_sec = [(sp * audio_duration_sec, ep * audio_duration_sec) for sp, ep in full_norm]
+
+    cuts_sec: List[float] = [0.0]
+    for b in range(k - 1):
+        prev_end_idx = beat_slices[b][1] - 1
+        next_start_idx = beat_slices[b + 1][0]
+        if prev_end_idx < 0 or next_start_idx >= len(word_times_sec):
+            cuts_sec.append(min(audio_duration_sec, ((b + 1) / float(k)) * audio_duration_sec))
+            continue
+
+        t_after_prev = word_times_sec[prev_end_idx][1]
+        t_before_next = word_times_sec[next_start_idx][0]
+        ideal_cut = 0.5 * (t_after_prev + t_before_next)
+
+        low_bound = max(cuts_sec[b] + 0.35, word_times_sec[max(0, prev_end_idx - 1)][0])
+        high_bound = min(
+            audio_duration_sec - 0.25 * (k - 1 - b),
+            word_times_sec[min(len(word_times_sec) - 1, next_start_idx)][1],
+        )
+        chosen_cut = max(low_bound, min(high_bound if high_bound > low_bound else low_bound, ideal_cut))
+
+        if energy_envelope and len(energy_envelope) >= 10 and high_bound > low_bound + 0.08:
+            target_idx = int(round(ideal_cut * samples_per_sec))
+            win_r = max(1, int(round(0.24 * samples_per_sec)))
+            idx_start = max(int(math.ceil(low_bound * samples_per_sec)), target_idx - win_r)
+            idx_end = min(int(math.floor(high_bound * samples_per_sec)), target_idx + win_r)
+            if idx_end >= idx_start:
+                best_idx = max(idx_start, min(idx_end, target_idx))
+                best_score = -1e9
+                env_len = len(energy_envelope)
+                for idx in range(idx_start, idx_end + 1):
+                    w0 = max(0, idx - 1)
+                    w1 = min(env_len - 1, idx + 1)
+                    local_mean = sum(energy_envelope[w0 : w1 + 1]) / float(max(1, w1 - w0 + 1))
+                    dist_penalty = 0.18 * (abs(idx - target_idx) / float(max(1, win_r)))
+                    score = 1.0 - local_mean - dist_penalty
+                    if score > best_score:
+                        best_score = score
+                        best_idx = idx
+                chosen_cut = max(low_bound, min(high_bound, best_idx / float(samples_per_sec)))
+
+        cuts_sec.append(chosen_cut)
+
+    cuts_sec.append(total_render_dur)
+    beat_durs = [max(0.35, cuts_sec[b + 1] - cuts_sec[b]) for b in range(k)]
+
+    beat_word_ranges: List[List[Tuple[float, float]]] = []
+    for b in range(k):
+        b_start = cuts_sec[b]
+        b_end = cuts_sec[b + 1]
+        b_dur = max(0.05, b_end - b_start)
+        s_w, e_w = beat_slices[b]
+        local_ranges: List[Tuple[float, float]] = []
+        for wi in range(s_w, e_w):
+            ws, we = word_times_sec[wi]
+            sp = max(0.0, min(0.99, (ws - b_start) / b_dur))
+            ep = max(sp + 0.004, min(1.0, (we - b_start) / b_dur))
+            local_ranges.append((sp, ep))
+        beat_word_ranges.append(local_ranges)
+
+    return reconciled, beat_durs, beat_word_ranges
 
 
 def _render_word_premul_sprite(
@@ -611,6 +970,10 @@ def build_subtitle_plan_for_box(
     ink_bgr: Tuple[int, int, int],
     accent_bgr: Tuple[int, int, int],
     prerender_sprites: bool = True,
+    energy_envelope: Optional[List[float]] = None,
+    word_ranges: Optional[List[Tuple[float, float]]] = None,
+    audio_duration_sec: Optional[float] = None,
+    total_duration_sec: Optional[float] = None,
 ) -> SubtitlePlan:
     """Đo và chia toàn bộ phụ đề thành các trang tối đa 2–3 dòng cố định vị trí từng từ."""
     words = [w for w in re.split(r"\s+", text.strip()) if w]
@@ -625,7 +988,15 @@ def build_subtitle_plan_for_box(
             word_page_map=[],
         )
 
-    words_range = compute_word_speech_schedule(words)
+    if word_ranges and len(word_ranges) == len(words):
+        words_range = word_ranges
+    else:
+        words_range = compute_word_speech_schedule(
+            words,
+            energy_envelope=energy_envelope,
+            audio_duration_sec=audio_duration_sec,
+            total_duration_sec=total_duration_sec,
+        )
 
     def _measure(f_size: float):
         fnt = _load_subtitle_font(int(round(f_size)))
@@ -723,6 +1094,10 @@ def prepare_motion_beat_asset(
     cached_full_png: Optional[Path] = None,
     subtitle_text: Optional[str] = None,
     theme: Optional[MotionThemeStyle] = None,
+    energy_envelope: Optional[List[float]] = None,
+    word_ranges: Optional[List[Tuple[float, float]]] = None,
+    audio_duration_sec: Optional[float] = None,
+    total_duration_sec: Optional[float] = None,
 ) -> MotionBeatAsset:
     """Rasterize trước toàn bộ các lớp SVG + pre-render từng từ phụ đề cho 1 beat."""
     clean_sub = re.sub(r"\s+", " ", (subtitle_text or "").strip())
@@ -786,6 +1161,10 @@ def prepare_motion_beat_asset(
                     max_lines_per_page=3 if is_vertical else 2,
                     ink_bgr=active_theme.ink_bgr,
                     accent_bgr=active_theme.accent_bgr,
+                    energy_envelope=energy_envelope,
+                    word_ranges=word_ranges,
+                    audio_duration_sec=audio_duration_sec,
+                    total_duration_sec=total_duration_sec,
                 )
 
             if stage_layer and (b1_layer or b2_layer or b3_layer):
@@ -915,22 +1294,24 @@ def _render_ambient_particles(
     theme: MotionThemeStyle,
     ui_scale: float,
 ) -> None:
-    """Vẽ 12 hạt không khí hình học tròn & vuông xoay trôi chậm phía sau sân khấu."""
-    base_alpha = 0.16 if theme.is_dark else 0.12
-    for i in range(12):
+    """Vẽ 5 hạt không khí hình tròn siêu nhẹ trôi êm phía sau sân khấu (không xoay vuông rối mắt)."""
+    base_alpha = 0.08 if theme.is_dark else 0.06
+    shift = 4
+    scale_s = 1 << shift
+    for i in range(5):
         seed = (i + 1) * 1.6180339
-        speed_y = (10.0 + (i % 5) * 4.5) * ui_scale
+        speed_y = (6.0 + (i % 3) * 2.5) * ui_scale
         x_base = ((seed * 417.0) % 1.0) * width
         y_span = height + 80.0 * ui_scale
         y_raw = (((seed * 733.0) % 1.0) * height - elapsed_sec * speed_y) % y_span
         y = y_raw + y_span if y_raw < -40.0 * ui_scale else y_raw
-        x = x_base + math.sin(elapsed_sec * (0.6 + (i % 3) * 0.25) + i) * 18.0 * ui_scale
-        radius = (3.5 + (i % 4) * 2.2) * ui_scale
-        pulse = 0.65 + 0.35 * math.sin(elapsed_sec * 1.8 + i * 1.3)
+        x = x_base + math.sin(elapsed_sec * 0.4 + i) * 10.0 * ui_scale
+        radius = (3.2 + (i % 3) * 1.6) * ui_scale
+        pulse = 0.72 + 0.28 * math.sin(elapsed_sec * 0.9 + i * 1.3)
         alpha = base_alpha * pulse
         color = theme.accent_bgr if i % 2 == 0 else theme.ink_bgr
 
-        pad = int(math.ceil(radius * 1.8)) + 3
+        pad = int(math.ceil(radius * 1.6)) + 2
         x0 = max(0, int(round(x)) - pad)
         y0 = max(0, int(round(y)) - pad)
         x1 = min(width, int(round(x)) + pad + 1)
@@ -943,33 +1324,15 @@ def _render_ambient_particles(
         mask = np.zeros((mh, mw), dtype=np.uint8)
         cx = x - x0
         cy = y - y0
-
-        if i % 3 == 0:
-            ang = elapsed_sec * 0.35 + i
-            ca = math.cos(ang)
-            sa = math.sin(ang)
-            corners = [(-radius, -radius), (radius, -radius), (radius, radius), (-radius, radius)]
-            pts = np.array(
-                [
-                    [int(round(cx + px * ca - py * sa)), int(round(cy + px * sa + py * ca))]
-                    for px, py in corners
-                ],
-                dtype=np.int32,
-            )
-            cv2.fillPoly(mask, [pts], 255, lineType=cv2.LINE_AA)
-        else:
-            shift = 4
-            scale_s = 1 << shift
-            cv2.circle(
-                mask,
-                (int(round(cx * scale_s)), int(round(cy * scale_s))),
-                max(1, int(round(radius * scale_s))),
-                255,
-                thickness=-1,
-                lineType=cv2.LINE_AA,
-                shift=shift,
-            )
-
+        cv2.circle(
+            mask,
+            (int(round(cx * scale_s)), int(round(cy * scale_s))),
+            max(1, int(round(radius * scale_s))),
+            255,
+            thickness=-1,
+            lineType=cv2.LINE_AA,
+            shift=shift,
+        )
         _blend_patch_bgr(frame, x0, y0, mask, color, alpha)
 
 
@@ -1297,119 +1660,107 @@ def render_living_beat_frame(
     theme: MotionThemeStyle,
     overall_progress: float = 0.0,
 ) -> np.ndarray:
-    """Dựng 1 khung hình BGR24 30fps hoàn chỉnh với đầy đủ chuyển động đa lớp & sub chạy từng từ."""
+    """Dựng 1 khung hình BGR24 30fps điềm tĩnh: khung ngoài đứng yên, chỉ nội dung bên trong chuyển động mượt."""
+    del voice_energy  # Không rung/đập nhún nhân vật hay badge sóng âm gây xao nhãng
     width = asset.width
     height = asset.height
     p = _clamp01(beat_p)
     is_vertical = height > width
     ui_scale = min(width, height) / 720.0
 
-    # 1. Nền phẳng đồng bộ màu kênh + 12 hạt không khí trôi mềm
+    # 1. Nền phẳng đồng bộ màu kênh + 5 hạt không khí trôi êm (không xoay vuông)
     frame = np.empty((height, width, 3), dtype=np.uint8)
     frame[:, :] = theme.bg_bgr
     _render_ambient_particles(frame, width, height, elapsed_sec, theme, ui_scale)
 
-    # 2. Chuyển cảnh trượt động (Directional Slide-Fade) trong 14% đầu tiên của beat mới
-    transition_window = 0.14
+    # 2. Chuyển cảnh hòa tan êm dịu (0.12 đầu nhịp), giữ khung ngoài đứng yên 100%
+    transition_window = 0.12
     trans_t = _clamp01(p / transition_window)
-    trans_ease = _ease_out_quart(trans_t)
-    slide_dir = 1 if beat_global_index % 2 == 0 else -1
+    trans_ease = _ease_out_cubic(trans_t)
 
     if trans_t < 1.0 and prev_asset is not None and prev_asset is not asset and prev_asset.full_layer is not None:
-        out_alpha = (1.0 - trans_ease) * 0.9
-        out_shift_x = -slide_dir * trans_ease * (width * 0.045)
+        out_alpha = (1.0 - trans_ease) * 0.5
         _draw_transformed_layer(
             frame,
             prev_asset.full_layer,
             alpha=out_alpha,
-            offset_x=out_shift_x,
-            scale=1.03 - 0.03 * trans_ease,
+            offset_x=0.0,
+            offset_y=0.0,
+            scale=1.0,
         )
 
-    # 3. Quỹ đạo camera điện ảnh cho beat hiện tại
-    cam_scale, cam_pan_x, cam_pan_y = _compute_camera_transform(beat_global_index, p, width, height)
-    enter_shift_x = (1.0 - trans_ease) * slide_dir * (width * 0.042)
-
+    # Nếu là ảnh đơn không tách lớp SVG -> giữ khung tĩnh vững vàng, thở zoom siêu nhẹ
     if not asset.has_layers or asset.stage_layer is None:
-        breath_zoom = 1.0 + math.sin(elapsed_sec * 2.1) * 0.008 + voice_energy * 0.01
-        float_y = math.sin(elapsed_sec * 1.8) * 4.0 * ui_scale
+        gentle_zoom = 1.0 + 0.015 * _ease_in_out_sine(p)
         _draw_transformed_layer(
             frame,
             asset.full_layer,
             alpha=trans_ease,
-            offset_x=cam_pan_x + enter_shift_x,
-            offset_y=cam_pan_y + float_y,
-            scale=cam_scale * breath_zoom,
+            offset_x=0.0,
+            offset_y=0.0,
+            scale=gentle_zoom,
         )
-        _render_voice_equalizer_badge(frame, voice_energy, elapsed_sec, theme, ui_scale)
         _render_overall_progress_bar(frame, overall_progress, theme, ui_scale)
         return frame
 
-    # 4. DIỄN HOẠT ĐA LỚP CHUẨN MOTION GRAPHICS
+    # 3. DIỄN HOẠT ĐA LỚP ĐIỀM TĨNH (KHUNG SÂN KHẤU ĐỨNG YÊN, CHỈ BÊN TRONG CHUYỂN ĐỘNG MƯỢT)
 
-    # Lớp 0: Khung sân khấu & tiêu đề chương
+    # Lớp 0: Khung sân khấu & tiêu đề chương (đứng vững 100%, không trượt ngang hay zoom lệch viền)
     _draw_transformed_layer(
         frame,
         asset.stage_layer,
         alpha=trans_ease,
-        offset_x=cam_pan_x * 0.65 + enter_shift_x,
-        offset_y=cam_pan_y * 0.65,
-        scale=1.0 + (cam_scale - 1.0) * 0.55,
+        offset_x=0.0,
+        offset_y=0.0,
+        scale=1.0,
     )
 
-    # Lớp 1 (beat-1): Nhân vật chính bật lò xo + nhịp thở + nghiêng đầu nhẹ theo giọng nói
-    b1_enter = _clamp01(p / 0.18)
-    b1_spring = _ease_out_back(b1_enter, 1.35)
-    b1_breath_y = (math.sin(elapsed_sec * 2.8 + beat_global_index) * 4.8 - voice_energy * 3.5) * ui_scale
-    b1_sway_rot = math.sin(elapsed_sec * 1.8 + beat_global_index * 0.7) * 0.011
-    b1_voice_scale = 1.0 + voice_energy * 0.014
+    # Lớp 1 (beat-1): Nhân vật/chủ thể chính tiến vào gọn gàng + nhịp thở cực nhẹ <= 1.2px
+    b1_enter = _clamp01(p / 0.16)
+    b1_ease = _ease_out_cubic(b1_enter)
+    b1_breath_y = math.sin(elapsed_sec * 1.4 + beat_global_index) * 1.2 * ui_scale
     _draw_transformed_layer(
         frame,
         asset.beat1_layer,
-        alpha=_ease_out_cubic(b1_enter),
-        offset_x=cam_pan_x + enter_shift_x * 1.15,
-        offset_y=cam_pan_y + (1.0 - b1_spring) * 28.0 * ui_scale + b1_breath_y,
-        scale=cam_scale * (0.86 + 0.14 * b1_spring) * b1_voice_scale,
-        rotation=b1_sway_rot,
+        alpha=b1_ease,
+        offset_x=0.0,
+        offset_y=(1.0 - b1_ease) * 14.0 * ui_scale + b1_breath_y,
+        scale=0.95 + 0.05 * b1_ease,
         pivot_x=width * 0.36,
         pivot_y=height * 0.48,
     )
 
-    # Lớp 2 (beat-2): Mũi tên / dấu X / hào quang nhấn bật nảy theo nhịp ý tưởng
-    b2_enter = _clamp01((p - 0.16) / 0.18)
+    # Lớp 2 (beat-2): Điểm nhấn thị giác hiện sắc nét (không rung đập liên hồi)
+    b2_enter = _clamp01((p - 0.14) / 0.16)
     if b2_enter > 0.0:
-        b2_pop = _ease_out_back(b2_enter, 1.85)
-        b2_pulse = 1.0 + math.sin(elapsed_sec * 4.6) * 0.024 + voice_energy * 0.036
-        b2_float_y = math.cos(elapsed_sec * 3.1) * 3.5 * ui_scale
+        b2_ease = _ease_out_quart(b2_enter)
         _draw_transformed_layer(
             frame,
             asset.beat2_layer,
-            alpha=_ease_out_cubic(b2_enter),
-            offset_x=cam_pan_x * 1.1,
-            offset_y=cam_pan_y + b2_float_y,
-            scale=cam_scale * (0.64 + 0.36 * b2_pop) * b2_pulse,
+            alpha=b2_ease,
+            offset_x=0.0,
+            offset_y=0.0,
+            scale=0.88 + 0.12 * b2_ease,
             pivot_x=width * 0.5,
             pivot_y=height * 0.45,
         )
 
-    # Lớp 3 (beat-3): Đạo cụ ẩn dụ / nhân vật đối diện trượt parallax 2.5D ngược pha
-    b3_enter = _clamp01((p - 0.28) / 0.18)
+    # Lớp 3 (beat-3): Đạo cụ ẩn dụ / đối thoại trượt vào êm ái rồi dừng vững vàng
+    b3_enter = _clamp01((p - 0.24) / 0.18)
     if b3_enter > 0.0:
-        b3_spring = _ease_out_back(b3_enter, 1.4)
-        b3_float_y = math.cos(elapsed_sec * 2.3 + beat_global_index) * 5.2 * ui_scale
-        b3_drift_x = math.sin(elapsed_sec * 1.5 + beat_global_index) * 3.5 * ui_scale
+        b3_ease = _ease_out_cubic(b3_enter)
         _draw_transformed_layer(
             frame,
             asset.beat3_layer,
-            alpha=_ease_out_cubic(b3_enter),
-            offset_x=cam_pan_x * 1.25 + (1.0 - b3_spring) * 34.0 * ui_scale + b3_drift_x,
-            offset_y=cam_pan_y + (1.0 - b3_spring) * 14.0 * ui_scale + b3_float_y,
-            scale=cam_scale * (0.88 + 0.12 * b3_spring),
+            alpha=b3_ease,
+            offset_x=(1.0 - b3_ease) * 18.0 * ui_scale,
+            offset_y=(1.0 - b3_ease) * 8.0 * ui_scale,
+            scale=0.94 + 0.06 * b3_ease,
             pivot_x=width * 0.68,
             pivot_y=height * 0.46,
         )
 
-    # Lớp 4 (studio-caption): Khung phụ đề đáy trượt lên ngay đầu nhịp + chữ chạy sub từng từ
+    # Lớp 4 (studio-caption): Hộp phụ đề đáy cố định ngang + chữ chạy sub khóa theo giọng nói thật
     if asset.caption_layer is not None:
         cap_enter = _clamp01(p / 0.10)
         cap_ease = _ease_out_quart(cap_enter)
@@ -1420,8 +1771,8 @@ def render_living_beat_frame(
         cap_box_h = height - cap_box_y - 24.0 * ui_scale
         cap_pivot_x = width / 2.0
         cap_pivot_y = cap_box_y + cap_box_h / 2.0
-        cap_offset_y = (1.0 - cap_ease) * 28.0 * ui_scale
-        cap_scale = 0.97 + 0.03 * cap_ease
+        cap_offset_y = (1.0 - cap_ease) * 8.0 * ui_scale
+        cap_scale = 1.0
 
         _draw_transformed_layer(
             frame,
@@ -1456,14 +1807,13 @@ def render_living_beat_frame(
                 x=bar_x,
                 y=bar_y,
                 w=max(8.0 * ui_scale, bar_max_w * p),
-                h=5.0 * ui_scale,
-                radius=2.5 * ui_scale,
+                h=4.5 * ui_scale,
+                radius=2.25 * ui_scale,
                 color_bgr=theme.accent_bgr,
-                opacity=0.85 * cap_ease,
+                opacity=0.82 * cap_ease,
             )
 
-    # 5. Thanh sóng âm 7 cột phản ứng theo giọng đọc thật + thanh tiến trình đáy video
-    _render_voice_equalizer_badge(frame, voice_energy, elapsed_sec, theme, ui_scale)
+    # 4. Thanh tiến trình đáy video gọn gàng (bỏ badge sóng âm góc trên trái)
     _render_overall_progress_bar(frame, overall_progress, theme, ui_scale)
     return frame
 
@@ -1476,7 +1826,15 @@ def render_living_beat_frame(
 class BoxProgressiveSubtitleTracker:
     """Bộ vẽ phụ đề chạy từng từ trong hộp tối phía dưới cho `pen_sketch`."""
 
-    def __init__(self, text: str, width: int, height: int) -> None:
+    def __init__(
+        self,
+        text: str,
+        width: int,
+        height: int,
+        energy_envelope: Optional[List[float]] = None,
+        audio_duration_sec: Optional[float] = None,
+        total_duration_sec: Optional[float] = None,
+    ) -> None:
         clean = re.sub(r"\s+", " ", (text or "").strip())
         is_vertical = height > width
         margin = int(round(min(width, height) * 0.036))
@@ -1503,6 +1861,9 @@ class BoxProgressiveSubtitleTracker:
             ink_bgr=(228, 238, 242),  # #F2EEE4 in BGR
             accent_bgr=self.accent_bgr,
             prerender_sprites=True,
+            energy_envelope=energy_envelope,
+            audio_duration_sec=audio_duration_sec,
+            total_duration_sec=total_duration_sec,
         )
 
     def draw(self, frame: np.ndarray, progress: float) -> None:
@@ -1552,6 +1913,8 @@ def write_progressive_ass_subtitle(
     output_ass_path: Path,
     width: int,
     height: int,
+    energy_envelope: Optional[List[float]] = None,
+    total_duration_sec: Optional[float] = None,
 ) -> Path:
     """
     Xuất tệp `.ass` phụ đề chạy từng từ (đọc tới đâu hiện chữ tới đó, tô sáng từ đang đọc)
@@ -1565,6 +1928,7 @@ def write_progressive_ass_subtitle(
     margin_v = margin + int(round(46.0 * ui_scale))
     max_box_w = (width - margin * 4) if is_vertical else min(width - margin * 4, int(round(920 * (width / 1280.0))))
 
+    span_sec = max(float(duration_sec), float(total_duration_sec or duration_sec))
     plan = build_subtitle_plan_for_box(
         text=clean,
         box_x=0.0,
@@ -1577,6 +1941,9 @@ def write_progressive_ass_subtitle(
         ink_bgr=(228, 238, 242),
         accent_bgr=(130, 200, 231),
         prerender_sprites=False,
+        energy_envelope=energy_envelope,
+        audio_duration_sec=duration_sec,
+        total_duration_sec=span_sec,
     )
 
     words = [w for w in re.split(r"\s+", clean) if w]
@@ -1608,13 +1975,13 @@ def write_progressive_ass_subtitle(
             ordered_lines = [lines_by_y[y] for y in sorted(lines_by_y.keys())]
 
             for sl in slots:
-                t_start = sl.start_p * duration_sec
+                t_start = sl.start_p * span_sec
                 # Kết thúc event ngay khi sang từ kế tiếp (hoặc kết thúc scene cho từ cuối trang/beat)
                 next_idx = sl.global_idx + 1
                 if next_idx < len(plan.word_page_map):
-                    t_end = plan.word_page_map[next_idx][0] * duration_sec
+                    t_end = plan.word_page_map[next_idx][0] * span_sec
                 else:
-                    t_end = max(t_start + 0.15, duration_sec - 0.05)
+                    t_end = max(t_start + 0.15, span_sec - 0.05)
 
                 if t_end <= t_start + 0.02:
                     t_end = t_start + 0.04
@@ -1664,10 +2031,12 @@ def render_motion_beat_scene_clip(
     cached_full_pngs: Optional[List[Path]] = None,
     theme: Optional[MotionThemeStyle] = None,
     beat_phrases: Optional[List[str]] = None,
+    scene_narration: Optional[str] = None,
+    beat_word_ranges: Optional[List[List[Tuple[float, float]]]] = None,
 ) -> Path:
     """
     Render toàn bộ các beat trong 1 phân cảnh thành clip `.mp4` 30fps bằng ống dẫn rawvideo
-    trực tiếp vào FFmpeg (`libx264` + `aac`), kèm chữ chạy sub theo từng âm tiết giọng đọc.
+    trực tiếp vào FFmpeg (`libx264` + `aac`), kèm chữ chạy sub khớp 100% âm tiết giọng đọc.
     """
     if not beat_durations:
         beat_durations = [4.0]
@@ -1678,12 +2047,36 @@ def render_motion_beat_scene_clip(
     fps = int(getattr(config, "VIDEO_FPS", 30))
     active_theme = theme or build_motion_theme_style()
 
+    # 1. Trích xuất đường bao giọng đọc 30Hz
+    energy_envelope = extract_audio_energy_envelope(audio_path, samples_per_sec=30)
+
     raw_total_dur = sum(max(0.4, float(d)) for d in beat_durations)
-    padded_duration = round(raw_total_dur + 0.35, 3)
+    tail_pad = 0.35
+    padded_duration = round(raw_total_dur + tail_pad, 3)
     total_frames = max(1, int(math.ceil(padded_duration * fps)))
 
-    adjusted_durs = [max(0.4, float(d)) for d in beat_durations]
-    adjusted_durs[-1] += 0.35
+    effective_phrases = list(beat_phrases) if beat_phrases else ["" for _ in beat_svgs]
+    effective_word_ranges = beat_word_ranges
+
+    if scene_narration and scene_narration.strip() and effective_word_ranges is None:
+        effective_phrases, synced_durs, effective_word_ranges = schedule_scene_speech_and_beats(
+            narration=scene_narration,
+            beat_phrases=effective_phrases,
+            energy_envelope=energy_envelope,
+            audio_duration_sec=raw_total_dur,
+            trailing_gap_sec=tail_pad,
+            samples_per_sec=30,
+        )
+        adjusted_durs = [max(0.4, float(d)) for d in synced_durs]
+    else:
+        adjusted_durs = [max(0.4, float(d)) for d in beat_durations]
+        adjusted_durs[-1] += tail_pad
+
+    # Chuẩn hóa tổng thời lượng đúng bằng padded_duration
+    dur_sum = sum(adjusted_durs)
+    if dur_sum > 0.1:
+        scale_f = padded_duration / dur_sum
+        adjusted_durs = [d * scale_f for d in adjusted_durs]
 
     beat_bounds: List[Tuple[float, float]] = []
     acc = 0.0
@@ -1691,14 +2084,22 @@ def render_motion_beat_scene_clip(
         beat_bounds.append((acc, acc + d))
         acc += d
 
-    # 1. Trích xuất đường bao giọng đọc 30Hz
-    energy_envelope = extract_audio_energy_envelope(audio_path, samples_per_sec=30)
-
-    # 2. Rasterize sẵn 5 lớp + bảng từ phụ đề cho từng beat trong phân cảnh
+    # 2. Rasterize sẵn 5 lớp + bảng từ phụ đề (khóa theo đường bao giọng nói & word_ranges chuẩn)
     beat_assets: List[MotionBeatAsset] = []
     for idx, svg_code in enumerate(beat_svgs):
         png_cache = cached_full_pngs[idx] if (cached_full_pngs and idx < len(cached_full_pngs)) else None
-        phrase = beat_phrases[idx] if (beat_phrases and idx < len(beat_phrases)) else None
+        phrase = effective_phrases[idx] if idx < len(effective_phrases) else None
+        w_ranges = (
+            effective_word_ranges[idx]
+            if (effective_word_ranges and idx < len(effective_word_ranges))
+            else None
+        )
+        b_start, b_end = beat_bounds[idx]
+        s_idx = max(0, int(math.floor(b_start * 30.0)))
+        e_idx = min(len(energy_envelope), int(math.ceil(b_end * 30.0)))
+        beat_env = energy_envelope[s_idx:e_idx] if e_idx > s_idx else None
+        beat_dur = max(0.2, b_end - b_start)
+        beat_audio_dur = max(0.2, beat_dur - (tail_pad if idx == len(beat_svgs) - 1 else 0.0))
         beat_assets.append(
             prepare_motion_beat_asset(
                 svg_markup=svg_code,
@@ -1707,6 +2108,10 @@ def render_motion_beat_scene_clip(
                 cached_full_png=png_cache,
                 subtitle_text=phrase,
                 theme=active_theme,
+                energy_envelope=beat_env,
+                word_ranges=w_ranges,
+                audio_duration_sec=beat_audio_dur,
+                total_duration_sec=beat_dur,
             )
         )
 

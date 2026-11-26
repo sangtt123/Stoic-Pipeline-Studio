@@ -19,6 +19,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from html import escape as html_escape
 from pathlib import Path
@@ -37,6 +38,14 @@ STUDIO_COMPOSITIONS: Tuple[str, ...] = (
     "two_characters_interaction",
     "character_on_pedestal",
     "checklist_steps",
+    "full_bleed_hook",
+    "dark_contrast_insight",
+    "quote_spotlight",
+    "closeup_portrait",
+    "timeline_progression",
+    "stat_callout_card",
+    "dialogue_debate",
+    "ai_bespoke_scene",
 )
 
 STUDIO_POSES: Tuple[str, ...] = (
@@ -102,6 +111,22 @@ STUDIO_PROPS: Tuple[str, ...] = (
     "growing_tree",
     "mask_duality",
     "speech_calm",
+    "kintsugi_bowl",
+    "iceberg_depth",
+    "domino_chain",
+    "candle_darkness",
+    "open_door_light",
+    "magnifying_glass",
+    "books_knowledge",
+    "seedling_crack",
+    "waves_boat",
+    "weight_lifting",
+    "social_likes_trap",
+    "coin_value",
+    "hamster_wheel",
+    "wings_freedom",
+    "radar_signal",
+    "bridge_gap",
 )
 
 STUDIO_OVERLAYS: Tuple[str, ...] = (
@@ -114,11 +139,24 @@ STUDIO_OVERLAYS: Tuple[str, ...] = (
     "spark_emphasis",
 )
 
+STUDIO_BACKDROPS: Tuple[str, ...] = (
+    "clean",
+    "grid_blueprint",
+    "mountain_horizon",
+    "city_skyline",
+    "library_arch",
+    "night_stars",
+    "zen_ripples",
+    "diagonal_rain",
+)
+
 STUDIO_CHARACTER_STYLES: Tuple[str, ...] = (
     "owl_philosopher",
     "cat_stoic",
     "fox_strategist",
     "shiba_sensei",
+    "dragon_sage",
+    "robot_zen",
     "stickman",
 )
 
@@ -147,6 +185,10 @@ class StudioShotBlueprint:
     secondary_pose: Optional[str] = None
     secondary_expression: Optional[str] = None
     secondary_prop: Optional[str] = None
+    stage_backdrop: str = "clean"
+    focal_metric: Optional[str] = None
+    custom_prop_svg: Optional[str] = None
+    custom_scene_svg: Optional[str] = None
     sub_phrase: str = ""
     left_badge: Optional[str] = None
     right_badge: Optional[str] = None
@@ -262,6 +304,50 @@ def infer_semantic_blueprint(
             beat_index=beat_index,
             total_beats=total_beats,
             **kwargs,
+        )
+
+    if idx == 0 or re.search(r"(bí mật|sự thật|cái bẫy|cảnh báo|sai lầm|đừng bao giờ|nguy hiểm|secret|trap|warning|mistake|never ignore|shocking truth)", text):
+        is_warn = bool(re.search(r"(cảnh báo|bẫy|sai lầm|trap|mistake|warning)", text))
+        return _make(
+            composition="full_bleed_hook",
+            character_pose="pointing_accuse" if is_warn else "standing_confident",
+            character_expression="determined" if is_warn else "confident",
+            primary_prop="flame_forge" if is_warn else "lightbulb",
+            overlay_effect="spark_emphasis",
+            left_badge=chapter_header or "ĐIỂM MẤU CHỐT",
+            caption=short_label or "Sự thật ít ai nói",
+        )
+
+    if re.search(r"(sợ hãi|hối tiếc|cái tôi|độc hại|ảo tưởng|bóng tối|thất bại|ghen tị|giận dữ|fear|regret|ego|toxic|illusion|dark|shadow|anger|failure)", text):
+        return _make(
+            composition="dark_contrast_insight",
+            character_pose="arms_crossed_steady",
+            character_expression="determined",
+            primary_prop="mask_duality" if re.search(r"(cái tôi|ảo tưởng|ego|illusion)", text) else "broken_chains",
+            overlay_effect="big_x_crossout",
+            left_badge="CẦN NHẬN DIỆN",
+            caption=short_label or "Góc khuất tâm lý",
+        )
+
+    if re.search(r"(câu nói|châm ngôn|nguyên tắc|marcus|seneca|epictetus|triết gia|quote|saying|maxim|ancient wisdom)", text):
+        return _make(
+            composition="quote_spotlight",
+            character_pose="presenting_idea",
+            character_expression="calm",
+            primary_prop="stoic_scroll",
+            overlay_effect="spark_emphasis",
+            left_badge="TRIẾT LÝ KHẮC KỶ",
+            caption=short_label or "Lời dạy cổ nhân",
+        )
+
+    if re.search(r"(tại sao|bạn có từng|cảm xúc|nội tâm|tự hỏi|gương|ánh nhìn|why|have you ever|emotion|feeling|self|mirror|reflect)", text):
+        return _make(
+            composition="closeup_portrait",
+            character_pose="thinking_chin",
+            character_expression="thinking" if re.search(r"(tại sao|tự hỏi|why|question)", text) else "calm",
+            primary_prop="mirror_self",
+            overlay_effect="spark_emphasis",
+            caption=short_label or "Soi chiếu chính mình",
         )
 
     if re.search(r"(đá tảng|hòn đá|tảng đá|boulder|rock|wind|luồng gió|gió thổi)", text):
@@ -383,14 +469,15 @@ def infer_semantic_blueprint(
             caption=short_label or "Tự do từ bên trong",
         )
 
-    if re.search(r"(khắc kỷ|marcus|seneca|epictetus|triết lý|cổ đại|sách|stoic|scroll|pillar|wisdom)", text):
+    if re.search(r"(khắc kỷ|triết lý|cổ đại|sách|stoic|scroll|pillar|wisdom)", text):
         return _make(
-            composition="character_left_prop_right",
+            composition="quote_spotlight",
             character_pose="presenting_idea",
             character_expression="calm",
             primary_prop="stoic_scroll",
             secondary_prop="temple_pillar",
             overlay_effect="spark_emphasis",
+            left_badge="TRIẾT LÝ CỔ XƯA",
             caption=short_label or "Triết lý cổ xưa",
         )
 
@@ -425,21 +512,172 @@ def infer_semantic_blueprint(
             caption=short_label or "Áp dụng ngay hôm nay",
         )
 
-    cycle_defaults = [
-        ("character_left_prop_right", "thinking_chin", "thinking", "compass", "spark_emphasis"),
-        ("split_comparison", "arms_crossed_steady", "determined", "balance_scale", "curved_arrow_right"),
-        ("center_metaphor", "standing_confident", "calm", "lightbulb", "upward_growth_arrow"),
-        ("character_on_pedestal", "standing_confident", "confident", "laurel_crown", "checkmark_badge"),
+    if re.search(r"(nứt|tổn thương|vết sẹo|chữa lành|hàn gắn|kintsugi|scar|heal|fracture)", text):
+        return _make(
+            composition="center_metaphor",
+            character_pose="standing_calm",
+            character_expression="peaceful",
+            primary_prop="kintsugi_bowl",
+            overlay_effect="spark_emphasis",
+            stage_backdrop="zen_ripples",
+            caption=short_label or "Biến vết nứt thành vàng",
+        )
+
+    if re.search(r"(tảng băng|bề nổi|ẩn sâu|tiềm thức|iceberg|beneath|subconscious|hidden depth)", text):
+        return _make(
+            composition="character_left_prop_right",
+            character_pose="thinking_chin",
+            character_expression="thinking",
+            primary_prop="iceberg_depth",
+            overlay_effect="spark_emphasis",
+            stage_backdrop="grid_blueprint",
+            caption=short_label or "Phần chìm quyết định",
+        )
+
+    if re.search(r"(chuỗi|hệ quả|dây chuyền|domino|hiệu ứng|ripple|chain reaction)", text):
+        return _make(
+            composition="timeline_progression",
+            character_pose="pointing_accuse",
+            character_expression="determined",
+            primary_prop="domino_chain",
+            overlay_effect="curved_arrow_right",
+            stage_backdrop="grid_blueprint",
+            caption=short_label or "Phản ứng dây chuyền",
+        )
+
+    if re.search(r"(\b\d+%|\b3 giây\b|\b10x\b|\b90%\b|\b80%\b|thống kê|tỷ lệ|con số|stat|percent)", text):
+        num_match = re.search(r"(\d+\s*%|3\s*giây|10x|#1)", text, flags=re.IGNORECASE)
+        return _make(
+            composition="stat_callout_card",
+            character_pose="presenting_idea",
+            character_expression="confident",
+            primary_prop="radar_signal",
+            overlay_effect="spark_emphasis",
+            stage_backdrop="grid_blueprint",
+            focal_metric=num_match.group(1).upper() if num_match else "90%",
+            caption=short_label or "Con số biết nói",
+        )
+
+    if re.search(r"(tranh luận|đối thoại|hai luồng|mâu thuẫn|cãi vã|debate|versus|argument|dialogue)", text):
+        return _make(
+            composition="dialogue_debate",
+            character_pose="arms_crossed_steady",
+            character_expression="calm",
+            secondary_pose="pointing_accuse",
+            secondary_expression="angry",
+            primary_prop="balance_scale",
+            overlay_effect="none",
+            left_badge="Cảm tính",
+            right_badge="Lý trí",
+            stage_backdrop="clean",
+            caption=short_label or "Lý trí hay cảm tính",
+        )
+
+    if re.search(r"(mạng xã hội|like|bình luận|sống ảo|hào nhoáng|lượt xem|social|likes|followers|approval)", text):
+        return _make(
+            composition="dark_contrast_insight",
+            character_pose="blocking_noise",
+            character_expression="determined",
+            primary_prop="social_likes_trap",
+            overlay_effect="big_x_crossout",
+            stage_backdrop="city_skyline",
+            left_badge="BẪY HƯ DANH",
+            caption=short_label or "Đừng sống vì nút Like",
+        )
+
+    if re.search(r"(guồng quay|lặp lại|bế tắc|chạy mãi|rat race|hamster|loop|burnout)", text):
+        return _make(
+            composition="prop_left_character_right",
+            character_pose="walking_forward",
+            character_expression="determined",
+            primary_prop="hamster_wheel",
+            overlay_effect="curved_arrow_right",
+            stage_backdrop="city_skyline",
+            caption=short_label or "Thoát khỏi vòng lặp",
+        )
+
+    cycle_defaults: List[Tuple[str, str, str, str, str, str, Optional[str]]] = [
+        ("full_bleed_hook", "standing_confident", "confident", "compass", "spark_emphasis", "night_stars", None),
+        ("closeup_portrait", "thinking_chin", "thinking", "magnifying_glass", "spark_emphasis", "zen_ripples", None),
+        ("split_comparison", "arms_crossed_steady", "determined", "balance_scale", "curved_arrow_right", "grid_blueprint", None),
+        ("timeline_progression", "walking_forward", "determined", "bridge_gap", "upward_growth_arrow", "mountain_horizon", None),
+        ("dark_contrast_insight", "blocking_noise", "determined", "candle_darkness", "big_x_crossout", "night_stars", None),
+        ("stat_callout_card", "presenting_idea", "confident", "kintsugi_bowl", "spark_emphasis", "grid_blueprint", "3 GIÂY"),
+        ("quote_spotlight", "presenting_idea", "calm", "books_knowledge", "spark_emphasis", "library_arch", None),
+        ("dialogue_debate", "standing_calm", "calm", "radar_signal", "none", "city_skyline", None),
+        ("character_left_prop_right", "walking_forward", "determined", "open_door_light", "upward_growth_arrow", "mountain_horizon", None),
+        ("center_metaphor", "standing_confident", "calm", "seedling_crack", "shield_aura", "zen_ripples", None),
+        ("ai_bespoke_scene", "victory_raised", "confident", "wings_freedom", "spark_emphasis", "mountain_horizon", None),
+        ("character_on_pedestal", "standing_confident", "confident", "laurel_crown", "checkmark_badge", "library_arch", None),
     ]
-    comp, pose, expr, prop, ov = cycle_defaults[abs(idx) % len(cycle_defaults)]
+    comp, pose, expr, prop, ov, backdrop, metric = cycle_defaults[abs(idx) % len(cycle_defaults)]
     return _make(
         composition=comp,
         character_pose=pose,
         character_expression=expr,
         primary_prop=prop,
         overlay_effect=ov,
+        stage_backdrop=backdrop,
+        focal_metric=metric,
         caption=short_label or "Góc nhìn Khắc kỷ",
     )
+
+
+def sanitize_custom_vector_fragment(raw_fragment: Any, theme: StudioThemeColors) -> Optional[str]:
+    """Làm sạch & kiểm định an toàn đoạn vector SVG do AI tự vẽ (custom_prop_svg / custom_scene_svg)."""
+    if not isinstance(raw_fragment, str):
+        return None
+    frag = raw_fragment.strip()
+    if not frag or len(frag) < 16 or len(frag) > 6000:
+        return None
+
+    inner_svg = re.search(r"<svg\b[^>]*>([\s\S]*?)</svg>", frag, flags=re.IGNORECASE)
+    if inner_svg:
+        frag = inner_svg.group(1).strip()
+
+    if re.search(r"<(?:script|foreignObject|iframe)\b|\son[a-z]+\s*=", frag, flags=re.IGNORECASE):
+        return None
+
+    frag = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", frag)
+    frag = re.sub(r"<!--[\s\S]*?-->", "", frag)
+    frag = re.sub(r"<style[\s\S]*?</style>", "", frag, flags=re.IGNORECASE)
+    frag = re.sub(
+        r"<(?:text|tspan|image|use|a)\b[\s\S]*?(?:/>|</(?:text|tspan|image|use|a)>)",
+        "",
+        frag,
+        flags=re.IGNORECASE,
+    )
+    frag = re.sub(r"(?:xlink:)?href\s*=\s*[\"'][^\"']*[\"']", "", frag, flags=re.IGNORECASE)
+    frag = re.sub(r"&(?!amp;|lt;|gt;|quot;|apos;|#[0-9]+;|#x[0-9a-fA-F]+;)", "&amp;", frag)
+
+    frag = re.sub(r"\{\{\s*INK\s*\}\}|__WB_INK__", theme.ink_color, frag, flags=re.IGNORECASE)
+    frag = re.sub(r"\{\{\s*ACCENT\s*\}\}|__WB_ACCENT__", theme.accent_color, frag, flags=re.IGNORECASE)
+    frag = re.sub(r"\{\{\s*SURFACE\s*\}\}|__WB_SURFACE__", theme.surface_fill, frag, flags=re.IGNORECASE)
+    frag = re.sub(r"\{\{\s*BG\s*\}\}|__WB_BG__", theme.bg_color, frag, flags=re.IGNORECASE)
+
+    allowed_tags = {"g", "path", "circle", "rect", "ellipse", "polygon", "polyline", "line"}
+    primitive_tags = {"path", "circle", "rect", "ellipse", "polygon", "polyline", "line"}
+
+    try:
+        root = ET.fromstring(f"<g>{frag}</g>")
+    except ET.ParseError:
+        return None
+
+    primitive_count = 0
+    for elem in root.iter():
+        tag_name = elem.tag.split("}", 1)[-1].lower()
+        if tag_name not in allowed_tags:
+            return None
+        for attr_key in list(elem.attrib.keys()):
+            attr_low = attr_key.split("}", 1)[-1].lower()
+            if attr_low.startswith("on") or attr_low == "href":
+                return None
+        if tag_name in primitive_tags:
+            primitive_count += 1
+
+    if primitive_count < 2:
+        return None
+    return frag
 
 
 def normalize_studio_blueprint(
@@ -496,6 +734,13 @@ def normalize_studio_blueprint(
         if raw.get("right_badge")
         else inferred.right_badge
     )
+    focal_metric = (
+        re.sub(r"[&<>]", " ", str(raw.get("focal_metric"))).strip()[:12]
+        if raw.get("focal_metric")
+        else inferred.focal_metric
+    )
+    custom_prop_svg = raw.get("custom_prop_svg") if isinstance(raw.get("custom_prop_svg"), str) else None
+    custom_scene_svg = raw.get("custom_scene_svg") if isinstance(raw.get("custom_scene_svg"), str) else None
 
     return StudioShotBlueprint(
         composition=_pick_enum(raw.get("composition"), STUDIO_COMPOSITIONS, inferred.composition),
@@ -519,6 +764,14 @@ def normalize_studio_blueprint(
             else inferred.secondary_prop
         ),
         overlay_effect=_pick_enum(raw.get("overlay_effect"), STUDIO_OVERLAYS, inferred.overlay_effect),
+        stage_backdrop=(
+            _pick_enum(raw.get("stage_backdrop"), STUDIO_BACKDROPS, inferred.stage_backdrop or "clean")
+            if raw.get("stage_backdrop")
+            else (inferred.stage_backdrop or "clean")
+        ),
+        focal_metric=focal_metric,
+        custom_prop_svg=custom_prop_svg,
+        custom_scene_svg=custom_scene_svg,
         caption=caption,
         sub_phrase=phrase,
         left_badge=left_badge,
@@ -627,11 +880,11 @@ def _render_mascot_head_and_face(
         eyes_svg = _render_eye_brows_and_pupils(expression, ink, accent, surface, -80)
         glasses_svg = (
             f"""
-            <circle cx="-16" cy="-80" r="13.5" fill="none" stroke="{ink}" stroke-width="2.6" stroke-opacity="0.88"/>
-            <circle cx="16" cy="-80" r="13.5" fill="none" stroke="{ink}" stroke-width="2.6" stroke-opacity="0.88"/>
-            <line x1="-2.5" y1="-80" x2="2.5" y2="-80" stroke="{ink}" stroke-width="2.6"/>
-            <line x1="-29.5" y1="-80" x2="-43" y2="-83" stroke="{ink}" stroke-width="2.4"/>
-            <line x1="29.5" y1="-80" x2="43" y2="-83" stroke="{ink}" stroke-width="2.4"/>
+            <circle cx="-16" cy="-80" r="12" fill="none" stroke="{ink}" stroke-width="2.6" stroke-opacity="0.88"/>
+            <circle cx="16" cy="-80" r="12" fill="none" stroke="{ink}" stroke-width="2.6" stroke-opacity="0.88"/>
+            <line x1="-4" y1="-80" x2="4" y2="-80" stroke="{ink}" stroke-width="2.6"/>
+            <line x1="-28" y1="-80" x2="-42" y2="-83" stroke="{ink}" stroke-width="2.4"/>
+            <line x1="28" y1="-80" x2="42" y2="-83" stroke="{ink}" stroke-width="2.4"/>
             """
             if expression != "shocked"
             else ""
@@ -706,6 +959,29 @@ def _render_mascot_head_and_face(
         {_render_animal_mouth(expression, ink, accent, -51)}
         """
 
+    if character_style == "dragon_sage":
+        return f"""
+        <path d="M-24 -110 Q-42 -138 -52 -134 Q-42 -120 -30 -104" fill="{accent}" fill-opacity="0.28" stroke="{ink}" stroke-width="4.6" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M24 -110 Q42 -138 52 -134 Q42 -120 30 -104" fill="{accent}" fill-opacity="0.28" stroke="{ink}" stroke-width="4.6" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M-46 -78 Q-44 -116 0 -116 Q44 -116 46 -78 Q50 -46 26 -36 Q0 -28 -26 -36 Q-50 -46 -46 -78 Z" fill="{surface}" stroke="{ink}" stroke-width="5.2" stroke-linejoin="round"/>
+        <path d="M-22 -114 L0 -96 L22 -114" fill="none" stroke="{accent}" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M-38 -56 Q-54 -46 -58 -36 M38 -56 Q54 -46 58 -36" fill="none" stroke="{ink}" stroke-width="3.6" stroke-linecap="round"/>
+        {_render_eye_brows_and_pupils(expression, ink, accent, surface, -79)}
+        <circle cx="-6" cy="-63" r="2.2" fill="{ink}"/>
+        <circle cx="6" cy="-63" r="2.2" fill="{ink}"/>
+        {_render_animal_mouth(expression, ink, accent, -51)}
+        """
+
+    if character_style == "robot_zen":
+        return f"""
+        <line x1="0" y1="-116" x2="0" y2="-136" stroke="{ink}" stroke-width="4.6" stroke-linecap="round"/>
+        <circle cx="0" cy="-140" r="6.5" fill="{accent}" stroke="{ink}" stroke-width="3.2"/>
+        <rect x="-46" y="-116" width="92" height="80" rx="22" fill="{surface}" stroke="{ink}" stroke-width="5.2"/>
+        <rect x="-35" y="-103" width="70" height="54" rx="14" fill="{ink}"/>
+        {_render_eye_brows_and_pupils(expression, accent, surface, ink, -80)}
+        {_render_animal_mouth(expression, surface, accent, -57)}
+        """
+
     return f"""
     <circle cx="0" cy="-76" r="46" fill="{surface}" stroke="{ink}" stroke-width="5.2"/>
     <path d="M-38 -102 Q-18 -134 18 -126 Q38 -120 44 -94 Q18 -110 -12 -106 Q-28 -104 -38 -102 Z" fill="{ink}"/>
@@ -736,18 +1012,67 @@ def _render_mascot_tail_behind(
         <path d="M-24 92 Q-68 88 -70 52 Q-70 30 -48 34 Q-36 38 -36 56" fill="none" stroke="{ink}" stroke-width="10" stroke-linecap="round"/>
         <circle cx="-48" cy="34" r="5" fill="{accent}" fill-opacity="0.8"/>
         </g>"""
+    if character_style == "dragon_sage":
+        return f"""<g transform="translate(0, {y_offset})">
+        <path d="M-24 94 Q-78 90 -80 46 Q-80 22 -56 26" fill="none" stroke="{ink}" stroke-width="9" stroke-linecap="round"/>
+        <polygon points="-58,18 -46,26 -58,34" fill="{accent}" stroke="{ink}" stroke-width="3" stroke-linejoin="round"/>
+        </g>"""
     if character_style == "owl_philosopher" and not is_meditating:
         return f'<polygon points="-14,102 0,126 14,102" fill="{accent}" fill-opacity="0.25" stroke="{ink}" stroke-width="4" stroke-linejoin="round"/>'
     return ""
 
 
-def _render_mascot_wing_trim(character_style: str, ink: str, accent: str) -> str:
-    if character_style != "owl_philosopher":
-        return ""
+def _render_mascot_wing_trim(
+    character_style: str,
+    ink: str,
+    accent: str,
+    surface: str,
+    tie_color: str,
+) -> str:
+    if character_style == "owl_philosopher":
+        return f"""
+        <path d="M-38 8 Q-18 -8 0 -2 Q18 -8 38 8 L44 50 Q20 38 0 54 Q-20 38 -44 50 Z" fill="{accent}" fill-opacity="0.16" stroke="{ink}" stroke-width="4" stroke-linejoin="round"/>
+        <path d="M-34 8 L-45 27 L-30 35 M34 8 L45 27 L30 35" fill="none" stroke="{accent}" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="0" cy="14" r="7.5" fill="{tie_color}" stroke="{ink}" stroke-width="3"/>
+        <path d="M-16 66 Q0 76 16 66" fill="none" stroke="{ink}" stroke-width="2.4" stroke-opacity="0.35" stroke-linecap="round"/>
+        """
+    if character_style == "cat_stoic":
+        return f"""
+        <path d="M-19 -28 Q0 -34 19 -28 L22 -2 Q0 8 -22 -2 Z" fill="{ink}" fill-opacity="0.88" stroke="{ink}" stroke-width="3.6" stroke-linejoin="round"/>
+        <path d="M-24 4 L-10 42 L0 26 L10 42 L24 4" fill="none" stroke="{ink}" stroke-width="3.8" stroke-linejoin="round"/>
+        <circle cx="15" cy="24" r="4.5" fill="{tie_color}"/>
+        """
+    if character_style == "fox_strategist":
+        return f"""
+        <path d="M-28 -14 L-16 -2 L0 -10 L16 -2 L28 -14 Q14 8 0 14 Q-14 8 -28 -14 Z" fill="{surface}" stroke="{ink}" stroke-width="3.8" stroke-linejoin="round"/>
+        <path d="M-22 10 L0 54 L22 10" fill="none" stroke="{ink}" stroke-width="3.8" stroke-linejoin="round"/>
+        <polygon points="0,20 -7,34 0,48 7,34" fill="{tie_color}"/>
+        """
+    if character_style == "shiba_sensei":
+        return f"""
+        <path d="M-24 2 L12 52 M24 2 L-12 52" fill="none" stroke="{ink}" stroke-width="4.2" stroke-linecap="round"/>
+        <rect x="-29" y="56" width="58" height="14" rx="4" fill="{tie_color}" stroke="{ink}" stroke-width="3.4"/>
+        """
+    if character_style == "dragon_sage":
+        return f"""
+        <path d="M-26 2 L0 32 L26 2" fill="none" stroke="{accent}" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="0" cy="46" r="8" fill="{tie_color}" stroke="{ink}" stroke-width="3"/>
+        """
+    if character_style == "robot_zen":
+        return f"""
+        <rect x="-22" y="16" width="44" height="30" rx="8" fill="{accent}" fill-opacity="0.16" stroke="{ink}" stroke-width="3.4"/>
+        <circle cx="0" cy="31" r="6" fill="{tie_color}"/>
+        """
     return f"""
-    <path d="M-34 8 L-45 27 L-30 35 M34 8 L45 27 L30 35" fill="none" stroke="{accent}" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M-16 86 Q0 96 16 86" fill="none" stroke="{ink}" stroke-width="2.5" stroke-opacity="0.35" stroke-linecap="round"/>
+    <path d="M-14 4 L0 20 L14 4" fill="none" stroke="{ink}" stroke-width="3.5" stroke-linejoin="round"/>
+    <polygon points="0,14 -8,44 0,76 8,44" fill="{tie_color}"/>
     """
+
+
+def _render_mascot_neck_join(character_style: str, ink: str, surface: str) -> str:
+    if character_style == "stickman":
+        return f'<rect x="-8" y="-32" width="16" height="34" rx="6" fill="{surface}" stroke="{ink}" stroke-width="4.5"/>'
+    return f'<path d="M-18 -38 Q0 -30 18 -38 L22 -4 Q0 6 -22 -4 Z" fill="{surface}" stroke="{ink}" stroke-width="4"/>'
 
 
 def _render_face_expression(expression: str, ink: str, accent: str, surface: str) -> str:
@@ -833,6 +1158,7 @@ def _render_studio_character(
     flip_x: bool = False,
     accent_tie: bool = True,
     character_style: str = DEFAULT_STUDIO_CHARACTER_STYLE,
+    waist_up: bool = False,
 ) -> str:
     ink = theme.ink_color
     accent = theme.accent_color
@@ -841,9 +1167,10 @@ def _render_studio_character(
     sx = -scale if flip_x else scale
     resolved_style = resolve_studio_character_style(character_style)
     head_svg = _render_mascot_head_and_face(resolved_style, expression, ink, accent, surface)
-    wing_trim_svg = _render_mascot_wing_trim(resolved_style, ink, accent)
+    wing_trim_svg = _render_mascot_wing_trim(resolved_style, ink, accent, surface, tie_color)
+    neck_join_svg = _render_mascot_neck_join(resolved_style, ink, surface)
 
-    if pose == "meditating_zen":
+    if pose == "meditating_zen" and not waist_up:
         tail_svg = _render_mascot_tail_behind(resolved_style, True, ink, accent, surface)
         return f"""<g transform="translate({x}, {y}) scale({sx}, {scale})">
       <ellipse cx="0" cy="146" rx="88" ry="15" fill="{ink}" fill-opacity="0.12"/>
@@ -853,12 +1180,11 @@ def _render_studio_character(
       <path d="M24 92 Q78 104 68 132 Q42 146 -8 134" fill="none" stroke="{ink}" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
       <path d="M-32 8 Q0 -6 32 8 L38 96 Q0 108 -38 96 Z" fill="{surface}" stroke="{ink}" stroke-width="5" stroke-linejoin="round"/>
       {wing_trim_svg}
-      <polygon points="0,4 -7,34 0,60 7,34" fill="{tie_color}"/>
       <path d="M-30 22 Q-66 56 -56 106 L-34 114" fill="none" stroke="{ink}" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
       <path d="M30 22 Q66 56 56 106 L34 114" fill="none" stroke="{ink}" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
       <circle cx="-32" cy="114" r="7" fill="{surface}" stroke="{ink}" stroke-width="4"/>
       <circle cx="32" cy="114" r="7" fill="{surface}" stroke="{ink}" stroke-width="4"/>
-      <rect x="-8" y="-32" width="16" height="32" rx="6" fill="{surface}" stroke="{ink}" stroke-width="4.5"/>
+      {neck_join_svg}
       {head_svg}
     </g>"""
 
@@ -988,35 +1314,81 @@ def _render_studio_character(
         left_hand = (-48, 102)
         right_hand = (92, 38)
 
-    tail_svg = _render_mascot_tail_behind(resolved_style, False, ink, accent, surface)
+    tail_svg = "" if waist_up else _render_mascot_tail_behind(resolved_style, False, ink, accent, surface)
+    base_layer = "" if waist_up else f'<ellipse cx="0" cy="172" rx="68" ry="12" fill="{ink}" fill-opacity="0.12"/>\n    {legs_svg}'
+    torso_path = (
+        f'<path d="M-36 8 Q0 -6 36 8 L44 148 L-44 148 Z" fill="{surface}" stroke="{ink}" stroke-width="5.2" stroke-linejoin="round"/>'
+        if waist_up
+        else f'<path d="M-34 8 Q0 -6 34 8 L28 104 Q0 112 -28 104 Z" fill="{surface}" stroke="{ink}" stroke-width="5.2" stroke-linejoin="round"/>'
+    )
+    eff_left_arm = left_arm
+    eff_right_arm = right_arm
+    eff_left_hand = left_hand
+    eff_right_hand = right_hand
+    eff_extra_prop = extra_prop
+
+    if waist_up:
+        if pose == "slumped_sad":
+            eff_left_arm = "M-26 26 L-44 64 L-30 82"
+            eff_right_arm = "M30 28 L46 66 L38 84"
+        elif pose == "pointing_accuse":
+            eff_right_arm = "M32 16 L66 10 L88 6"
+            eff_right_hand = (88, 6)
+        elif pose == "blocking_noise":
+            eff_right_arm = "M32 16 L68 8 L86 -12"
+            eff_right_hand = (86, -12)
+            eff_extra_prop = f"""
+        <path d="M95 -34 L95 10" stroke="{accent}" stroke-width="5.5" stroke-linecap="round"/>
+        <path d="M106 -26 L106 2" stroke="{accent}" stroke-width="3.8" stroke-linecap="round" stroke-opacity="0.55"/>
+        """
+        elif pose == "presenting_idea":
+            eff_right_arm = "M32 16 L66 -2 L86 -24"
+            eff_right_hand = (86, -24)
+        elif pose == "shield_stance":
+            eff_right_arm = "M32 18 L60 28 L72 12"
+            eff_right_hand = (72, 12)
+            eff_extra_prop = f"""
+        <path d="M72 -28 L106 -16 L102 36 Q86 66 72 78 Q58 66 54 36 L58 -16 Z" fill="{surface}" stroke="{accent}" stroke-width="5.5" stroke-linejoin="round"/>
+        <path d="M72 -10 L90 -3 L88 28 Q79 46 72 54 Q65 46 63 28 L65 -3 Z" fill="{accent}" fill-opacity="0.18"/>
+        <path d="M62 22 L70 30 L84 12" fill="none" stroke="{accent}" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+        """
+        eff_left_hand = (max(-88, min(88, eff_left_hand[0])), min(eff_left_hand[1], 82))
+        eff_right_hand = (max(-88, min(88, eff_right_hand[0])), min(eff_right_hand[1], 84))
 
     return f"""<g transform="translate({x}, {y}) scale({sx}, {scale})">
-    <ellipse cx="0" cy="172" rx="68" ry="12" fill="{ink}" fill-opacity="0.12"/>
-    {legs_svg}
+    {base_layer}
     <g transform="{torso_skew}">
       {tail_svg}
-      <path d="{left_arm}" fill="none" stroke="{ink}" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
-      <circle cx="{left_hand[0]}" cy="{left_hand[1]}" r="7.5" fill="{surface}" stroke="{ink}" stroke-width="4"/>
-      <path d="M-34 8 Q0 -6 34 8 L28 104 Q0 112 -28 104 Z" fill="{surface}" stroke="{ink}" stroke-width="5.2" stroke-linejoin="round"/>
+      <path d="{eff_left_arm}" fill="none" stroke="{ink}" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="{eff_left_hand[0]}" cy="{eff_left_hand[1]}" r="7.5" fill="{surface}" stroke="{ink}" stroke-width="4"/>
+      {torso_path}
       {wing_trim_svg}
-      <path d="M-14 4 L0 20 L14 4" fill="none" stroke="{ink}" stroke-width="3.5" stroke-linejoin="round"/>
-      <polygon points="0,14 -8,44 0,76 8,44" fill="{tie_color}"/>
-      <path d="{right_arm}" fill="none" stroke="{ink}" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
-      <circle cx="{right_hand[0]}" cy="{right_hand[1]}" r="7.5" fill="{surface}" stroke="{ink}" stroke-width="4"/>
+      <path d="{eff_right_arm}" fill="none" stroke="{ink}" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="{eff_right_hand[0]}" cy="{eff_right_hand[1]}" r="7.5" fill="{surface}" stroke="{ink}" stroke-width="4"/>
       <g transform="translate({head_shift_x}, {head_shift_y})">
-        <rect x="-8" y="-32" width="16" height="34" rx="6" fill="{surface}" stroke="{ink}" stroke-width="4.5"/>
+        {neck_join_svg}
         {head_svg}
       </g>
-      {extra_prop}
+      {eff_extra_prop}
     </g>
   </g>"""
 
 
-def _render_studio_prop(prop: str, x: int, y: int, scale: float, theme: StudioThemeColors) -> str:
+def _render_studio_prop(
+    prop: str,
+    x: int,
+    y: int,
+    scale: float,
+    theme: StudioThemeColors,
+    custom_prop_svg: Optional[str] = None,
+) -> str:
     bg = theme.bg_color
     ink = theme.ink_color
     accent = theme.accent_color
     surface = theme.surface_fill
+    sanitized_custom = sanitize_custom_vector_fragment(custom_prop_svg, theme)
+    if sanitized_custom:
+        return f'<g transform="translate({x}, {y}) scale({scale})">{sanitized_custom}</g>'
     inner = ""
 
     if prop == "boulder_wind":
@@ -1223,8 +1595,8 @@ def _render_studio_prop(prop: str, x: int, y: int, scale: float, theme: StudioTh
         <ellipse cx="0" cy="108" rx="76" ry="12" fill="{ink}" fill-opacity="0.12"/>
         <rect x="-70" y="-96" width="140" height="194" rx="70" fill="{surface}" stroke="{ink}" stroke-width="6.5"/>
         <rect x="-54" y="-80" width="108" height="162" rx="54" fill="{accent}" fill-opacity="0.12" stroke="{accent}" stroke-width="4"/>
-        <line x1="-26" y1="-44" x2="14" y2="-8" stroke="{surface}" stroke-width="7" stroke-linecap="round"/>
-        <line x1="-24" y1="-12" x2="4" y2="14" stroke="{surface}" stroke-width="5" stroke-linecap="round"/>
+        <line x1="-26" y1="-44" x2="14" y2="-8" stroke="{accent}" stroke-opacity="0.45" stroke-width="7" stroke-linecap="round"/>
+        <line x1="-24" y1="-12" x2="4" y2="14" stroke="{accent}" stroke-opacity="0.35" stroke-width="5" stroke-linecap="round"/>
         <circle cx="0" cy="24" r="24" fill="{surface}" stroke="{ink}" stroke-width="4.5"/>
         """
     elif prop == "brick_wall":
@@ -1354,6 +1726,131 @@ def _render_studio_prop(prop: str, x: int, y: int, scale: float, theme: StudioTh
           <path d="M-16 18 Q0 32 16 18" fill="none" stroke="{ink}" stroke-width="4.5" stroke-linecap="round"/>
         </g>
         """
+    elif prop == "kintsugi_bowl":
+        inner = f"""
+        <ellipse cx="0" cy="96" rx="88" ry="12" fill="{ink}" fill-opacity="0.12"/>
+        <path d="M-92 -28 Q-92 66 0 84 Q92 66 92 -28 Z" fill="{surface}" stroke="{ink}" stroke-width="6" stroke-linejoin="round"/>
+        <ellipse cx="0" cy="-28" rx="92" ry="18" fill="{bg}" stroke="{ink}" stroke-width="5.5"/>
+        <path d="M-36 -10 L-12 24 L-26 52 L6 78 M28 -12 L8 22 L32 48" fill="none" stroke="{accent}" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="-12" cy="24" r="5" fill="{accent}"/>
+        """
+    elif prop == "iceberg_depth":
+        inner = f"""
+        <rect x="-126" y="-8" width="252" height="106" rx="14" fill="{accent}" fill-opacity="0.12" stroke="{accent}" stroke-width="3" stroke-dasharray="8 6"/>
+        <line x1="-132" y1="-8" x2="132" y2="-8" stroke="{accent}" stroke-width="5" stroke-linecap="round"/>
+        <polygon points="-38,-8 -8,-84 22,-52 44,-8" fill="{surface}" stroke="{ink}" stroke-width="5.5" stroke-linejoin="round"/>
+        <polygon points="-44,-8 50,-8 92,42 36,96 -48,88 -82,36" fill="{surface}" fill-opacity="0.88" stroke="{ink}" stroke-width="5.5" stroke-linejoin="round"/>
+        <path d="M-8 -8 L12 88 M44 -8 L36 42" stroke="{ink}" stroke-width="3.5" stroke-opacity="0.45"/>
+        """
+    elif prop == "domino_chain":
+        inner = f"""
+        <ellipse cx="0" cy="96" rx="116" ry="12" fill="{ink}" fill-opacity="0.12"/>
+        <g transform="translate(-72, 24) rotate(26)"><rect x="-18" y="-56" width="36" height="112" rx="8" fill="{surface}" stroke="{ink}" stroke-width="5"/><circle cx="0" cy="-26" r="5" fill="{ink}"/><circle cx="0" cy="26" r="5" fill="{ink}"/></g>
+        <g transform="translate(-8, 12) rotate(14)"><rect x="-18" y="-56" width="36" height="112" rx="8" fill="{surface}" stroke="{ink}" stroke-width="5"/><circle cx="0" cy="-26" r="5" fill="{accent}"/><circle cx="0" cy="26" r="5" fill="{accent}"/></g>
+        <g transform="translate(64, 4)"><rect x="-18" y="-56" width="36" height="112" rx="8" fill="{accent}" fill-opacity="0.22" stroke="{accent}" stroke-width="5.5"/><path d="M-8 0 L0 10 L12 -10" fill="none" stroke="{accent}" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></g>
+        """
+    elif prop == "candle_darkness":
+        inner = f"""
+        <circle cx="0" cy="-42" r="78" fill="{accent}" fill-opacity="0.14" stroke="{accent}" stroke-width="3" stroke-dasharray="8 8"/>
+        <path d="M0 -84 C18 -58 22 -36 0 -22 C-22 -36 -18 -58 0 -84 Z" fill="{accent}" stroke="{ink}" stroke-width="4" stroke-linejoin="round"/>
+        <line x1="0" y1="-22" x2="0" y2="-8" stroke="{ink}" stroke-width="4"/>
+        <rect x="-28" y="-8" width="56" height="98" rx="8" fill="{surface}" stroke="{ink}" stroke-width="5.5"/>
+        <rect x="-48" y="88" width="96" height="16" rx="6" fill="{ink}"/>
+        """
+    elif prop == "open_door_light":
+        inner = f"""
+        <polygon points="10,-86 116,-106 116,104 10,86" fill="{accent}" fill-opacity="0.22" stroke="{accent}" stroke-width="4" stroke-dasharray="8 6"/>
+        <rect x="-78" y="-86" width="92" height="172" rx="6" fill="{surface}" stroke="{ink}" stroke-width="6"/>
+        <polygon points="-78,-86 10,-64 10,64 -78,86" fill="{bg}" stroke="{ink}" stroke-width="5.5" stroke-linejoin="round"/>
+        <circle cx="-12" cy="4" r="6" fill="{accent}"/>
+        """
+    elif prop == "magnifying_glass":
+        inner = f"""
+        <circle cx="-16" cy="-16" r="68" fill="{surface}" stroke="{ink}" stroke-width="7"/>
+        <circle cx="-16" cy="-16" r="46" fill="{accent}" fill-opacity="0.14" stroke="{accent}" stroke-width="4"/>
+        <circle cx="-16" cy="-16" r="14" fill="{accent}"/>
+        <line x1="34" y1="34" x2="92" y2="92" stroke="{ink}" stroke-width="14" stroke-linecap="round"/>
+        <line x1="34" y1="34" x2="92" y2="92" stroke="{accent}" stroke-width="5" stroke-linecap="round"/>
+        """
+    elif prop == "books_knowledge":
+        inner = f"""
+        <ellipse cx="0" cy="102" rx="96" ry="12" fill="{ink}" fill-opacity="0.12"/>
+        <rect x="-86" y="42" width="172" height="44" rx="8" fill="{surface}" stroke="{ink}" stroke-width="5.5"/>
+        <rect x="-72" y="-6" width="144" height="44" rx="8" fill="{accent}" fill-opacity="0.22" stroke="{ink}" stroke-width="5.5"/>
+        <rect x="-58" y="-54" width="116" height="44" rx="8" fill="{surface}" stroke="{ink}" stroke-width="5.5"/>
+        <path d="M52 -96 Q84 -84 74 -44 L44 -52 Z" fill="{accent}" stroke="{ink}" stroke-width="4" stroke-linejoin="round"/>
+        """
+    elif prop == "seedling_crack":
+        inner = f"""
+        <path d="M-112 72 L-38 56 L0 84 L46 58 L112 72" fill="none" stroke="{ink}" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M0 78 L0 -12" stroke="{ink}" stroke-width="6.5" stroke-linecap="round"/>
+        <path d="M0 -4 Q-54 -48 -58 -8 Q-36 16 0 -4 Z" fill="{accent}" fill-opacity="0.28" stroke="{ink}" stroke-width="5" stroke-linejoin="round"/>
+        <path d="M0 -20 Q56 -72 62 -24 Q38 4 0 -20 Z" fill="{accent}" stroke="{ink}" stroke-width="5" stroke-linejoin="round"/>
+        """
+    elif prop == "waves_boat":
+        inner = f"""
+        <polygon points="-58,18 58,18 40,56 -40,56" fill="{surface}" stroke="{ink}" stroke-width="5.5" stroke-linejoin="round"/>
+        <line x1="0" y1="18" x2="0" y2="-76" stroke="{ink}" stroke-width="6" stroke-linecap="round"/>
+        <polygon points="0,-74 52,-12 0,-4" fill="{accent}" fill-opacity="0.88" stroke="{ink}" stroke-width="4.5" stroke-linejoin="round"/>
+        <path d="M-118 68 Q-84 44 -50 68 Q-16 92 18 68 Q52 44 86 68 Q106 82 122 68" fill="none" stroke="{accent}" stroke-width="6.5" stroke-linecap="round"/>
+        """
+    elif prop == "weight_lifting":
+        inner = f"""
+        <ellipse cx="0" cy="96" rx="92" ry="12" fill="{ink}" fill-opacity="0.12"/>
+        <line x1="-88" y1="0" x2="88" y2="0" stroke="{ink}" stroke-width="9" stroke-linecap="round"/>
+        <rect x="-86" y="-44" width="24" height="88" rx="8" fill="{surface}" stroke="{ink}" stroke-width="5.5"/>
+        <rect x="-106" y="-30" width="18" height="60" rx="6" fill="{accent}" stroke="{ink}" stroke-width="4.5"/>
+        <rect x="62" y="-44" width="24" height="88" rx="8" fill="{surface}" stroke="{ink}" stroke-width="5.5"/>
+        <rect x="88" y="-30" width="18" height="60" rx="6" fill="{accent}" stroke="{ink}" stroke-width="4.5"/>
+        <path d="M0 -68 L0 -26 M-16 -52 L0 -68 L16 -52" fill="none" stroke="{accent}" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+        """
+    elif prop == "social_likes_trap":
+        inner = f"""
+        <rect x="-86" y="-68" width="172" height="122" rx="22" fill="{surface}" stroke="{ink}" stroke-width="5.5"/>
+        <path d="M0 18 C-42 -8 -44 -42 -20 -50 C-6 -54 0 -40 0 -32 C0 -40 6 -54 20 -50 C44 -42 42 -8 0 18 Z" fill="{accent}" stroke="{ink}" stroke-width="4.5"/>
+        <path d="M-64 78 L64 78" stroke="{ink}" stroke-width="6" stroke-linecap="round"/>
+        <path d="M-44 -78 L44 64 M44 -78 L-44 64" stroke="{accent}" stroke-width="8" stroke-linecap="round" stroke-opacity="0.85"/>
+        """
+    elif prop == "coin_value":
+        inner = f"""
+        <ellipse cx="0" cy="102" rx="76" ry="12" fill="{ink}" fill-opacity="0.12"/>
+        <circle cx="-18" cy="-4" r="74" fill="{accent}" fill-opacity="0.22" stroke="{ink}" stroke-width="6"/>
+        <circle cx="-18" cy="-4" r="52" fill="{surface}" stroke="{accent}" stroke-width="4.5"/>
+        <path d="M-18 -32 L-18 24 M-32 -16 Q-18 -28 -4 -16 Q-18 -4 -32 8 Q-18 20 -4 8" fill="none" stroke="{ink}" stroke-width="5" stroke-linecap="round"/>
+        <polygon points="62,-72 72,-44 100,-44 78,-26 86,2 62,-16 38,2 46,-26 24,-44 52,-44" fill="{accent}" stroke="{ink}" stroke-width="4" stroke-linejoin="round"/>
+        """
+    elif prop == "hamster_wheel":
+        inner = f"""
+        <circle cx="0" cy="-6" r="84" fill="{surface}" stroke="{ink}" stroke-width="7"/>
+        <circle cx="0" cy="-6" r="62" fill="none" stroke="{accent}" stroke-width="4" stroke-dasharray="12 10"/>
+        <line x1="-62" y1="-6" x2="62" y2="-6" stroke="{ink}" stroke-width="4"/>
+        <line x1="0" y1="-68" x2="0" y2="56" stroke="{ink}" stroke-width="4"/>
+        <path d="M-48 88 L0 58 L48 88" fill="none" stroke="{ink}" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M88 -54 A102 102 0 0 1 92 38" fill="none" stroke="{accent}" stroke-width="6" stroke-linecap="round"/>
+        """
+    elif prop == "wings_freedom":
+        inner = f"""
+        <path d="M-12 24 C-68 18 -114 -24 -116 -76 C-76 -66 -46 -46 -22 -14 C-48 -28 -84 -32 -98 -4 C-68 10 -40 16 -12 24 Z" fill="{surface}" stroke="{ink}" stroke-width="5.5" stroke-linejoin="round"/>
+        <path d="M12 24 C68 18 114 -24 116 -76 C76 -66 46 -46 22 -14 C48 -28 84 -32 98 -4 C68 10 40 16 12 24 Z" fill="{accent}" fill-opacity="0.22" stroke="{ink}" stroke-width="5.5" stroke-linejoin="round"/>
+        <circle cx="0" cy="-16" r="16" fill="{accent}" stroke="{ink}" stroke-width="4"/>
+        """
+    elif prop == "radar_signal":
+        inner = f"""
+        <circle cx="0" cy="0" r="92" fill="{surface}" stroke="{ink}" stroke-width="5.5"/>
+        <circle cx="0" cy="0" r="60" fill="none" stroke="{ink}" stroke-width="3.5" stroke-opacity="0.45"/>
+        <circle cx="0" cy="0" r="28" fill="none" stroke="{accent}" stroke-width="4"/>
+        <line x1="0" y1="-92" x2="0" y2="92" stroke="{ink}" stroke-width="2.5" stroke-opacity="0.35"/>
+        <line x1="-92" y1="0" x2="92" y2="0" stroke="{ink}" stroke-width="2.5" stroke-opacity="0.35"/>
+        <polygon points="0,0 56,-68 78,-26" fill="{accent}" fill-opacity="0.28"/>
+        <circle cx="44" cy="-36" r="9" fill="{accent}"/>
+        """
+    elif prop == "bridge_gap":
+        inner = f"""
+        <polygon points="-126,92 -126,18 -64,18 -48,92" fill="{surface}" stroke="{ink}" stroke-width="5.5" stroke-linejoin="round"/>
+        <polygon points="126,92 126,18 64,18 48,92" fill="{surface}" stroke="{ink}" stroke-width="5.5" stroke-linejoin="round"/>
+        <path d="M-76 18 Q0 -34 76 18" fill="none" stroke="{accent}" stroke-width="9" stroke-linecap="round"/>
+        <path d="M-72 2 Q0 -48 72 2" fill="none" stroke="{ink}" stroke-width="4" stroke-dasharray="8 8"/>
+        """
     else:  # speech_calm
         inner = f"""
         <rect x="-98" y="-66" width="196" height="118" rx="22" fill="{surface}" stroke="{ink}" stroke-width="5.5"/>
@@ -1416,25 +1913,36 @@ def render_studio_shot_svg(
     cx = round(vb_w / 2)
 
     backdrop_decor = f"""
-    <rect width="{vb_w}" height="{vb_h}" fill="{bg}"/>
+    <rect id="studio-backdrop-bg" width="{vb_w}" height="{vb_h}" fill="{bg}"/>
     <circle cx="{round(vb_w * 0.14)}" cy="{round(vb_h * 0.18)}" r="{140 if is_vertical else 190}" fill="{accent}" fill-opacity="0.05"/>
     <circle cx="{round(vb_w * 0.86)}" cy="{round(vb_h * 0.78)}" r="{160 if is_vertical else 210}" fill="{ink}" fill-opacity="0.04"/>
     """
 
-    header_clean = re.sub(r"[&<>]", " ", str(blueprint.chapter_header or "")).strip()[:48]
+    has_counter = (
+        blueprint.beat_index is not None
+        and blueprint.total_beats is not None
+        and blueprint.total_beats > 1
+    )
+
+    header_clean = re.sub(r"[&<>]", " ", str(blueprint.chapter_header or "")).strip()[: (34 if is_vertical else 48)]
+    header_rect_x = 44 if is_vertical else cx - 320
+    header_rect_w = (vb_w - 180 if has_counter else vb_w - 88) if is_vertical else 640
+    header_text_x = round(header_rect_x + header_rect_w / 2)
     header_svg = ""
     if header_clean:
         header_svg = f"""
     <g id="studio-header">
-      <rect x="{cx - 320}" y="22" width="640" height="50" rx="25" fill="{surface}" stroke="{ink}" stroke-width="3"/>
-      <text x="{cx}" y="55" text-anchor="middle" font-family="{FONT_FAMILY}" font-size="24" font-weight="700" fill="{ink}">{_escape_xml(header_clean)}</text>
+      <rect x="{header_rect_x}" y="22" width="{header_rect_w}" height="50" rx="25" fill="{surface}" stroke="{ink}" stroke-width="3"/>
+      <text x="{header_text_x}" y="54" text-anchor="middle" font-family="{FONT_FAMILY}" font-size="{20 if is_vertical else 24}" font-weight="700" fill="{ink}">{_escape_xml(header_clean)}</text>
     </g>"""
 
     beat_counter_svg = ""
-    if blueprint.beat_index is not None and blueprint.total_beats is not None and blueprint.total_beats > 1:
+    if has_counter:
         beat_counter_svg = (
-            f'<rect x="{vb_w - 118}" y="24" width="84" height="36" rx="18" fill="{accent}" fill-opacity="0.14" stroke="{accent}" stroke-width="2.5"/>'
-            f'<text x="{vb_w - 76}" y="48" text-anchor="middle" font-family="{FONT_FAMILY}" font-size="18" font-weight="800" fill="{accent}">{blueprint.beat_index + 1}/{blueprint.total_beats}</text>'
+            f'<g id="studio-beat-counter">'
+            f'<rect x="{vb_w - 118}" y="24" width="84" height="36" rx="18" fill="{surface}" fill-opacity="0.96" stroke="{accent}" stroke-width="2.5"/>'
+            f'<text x="{vb_w - 76}" y="48" text-anchor="middle" font-family="{FONT_FAMILY}" font-size="18" font-weight="800" fill="{accent}">{(blueprint.beat_index or 0) + 1}/{blueprint.total_beats}</text>'
+            f'</g>'
         )
 
     stage_x = 44 if is_vertical else 68
@@ -1443,12 +1951,99 @@ def render_studio_shot_svg(
     stage_h = 790 if is_vertical else 482
     stage_mid_x = round(stage_x + stage_w / 2)
     stage_mid_y = round(stage_y + stage_h / 2)
+    caption_box_y = stage_y + stage_h + 22
+    caption_box_h = vb_h - caption_box_y - 24
 
-    stage_frame_svg = f"""
-    <rect x="{stage_x + 8}" y="{stage_y + 8}" width="{stage_w}" height="{stage_h}" rx="28" fill="{ink}" fill-opacity="0.08"/>
-    <rect x="{stage_x}" y="{stage_y}" width="{stage_w}" height="{stage_h}" rx="28" fill="{surface}" stroke="{ink}" stroke-width="4"/>
-    <line x1="{stage_x + 42}" y1="{stage_y + stage_h - 54}" x2="{stage_x + stage_w - 42}" y2="{stage_y + stage_h - 54}" stroke="{ink}" stroke-width="2.5" stroke-opacity="0.18" stroke-linecap="round"/>
-    """
+    comp = blueprint.composition
+    is_full_bleed = comp == "full_bleed_hook"
+    is_dark_contrast = comp == "dark_contrast_insight"
+    stage_backdrop_style = _pick_enum(getattr(blueprint, "stage_backdrop", "clean"), STUDIO_BACKDROPS, "clean")
+
+    def _render_stage_backdrop_pattern(
+        backdrop: str,
+        sx: int,
+        sy: int,
+        sw: int,
+        sh: int,
+        fg_color: str,
+        hi_color: str,
+    ) -> str:
+        if backdrop == "grid_blueprint":
+            return f"""
+          <g opacity="0.09" stroke="{fg_color}" stroke-width="1.5">
+            <line x1="{sx + round(sw * 0.25)}" y1="{sy + 24}" x2="{sx + round(sw * 0.25)}" y2="{sy + sh - 24}"/>
+            <line x1="{sx + round(sw * 0.50)}" y1="{sy + 24}" x2="{sx + round(sw * 0.50)}" y2="{sy + sh - 24}"/>
+            <line x1="{sx + round(sw * 0.75)}" y1="{sy + 24}" x2="{sx + round(sw * 0.75)}" y2="{sy + sh - 24}"/>
+            <line x1="{sx + 24}" y1="{sy + round(sh * 0.33)}" x2="{sx + sw - 24}" y2="{sy + round(sh * 0.33)}"/>
+            <line x1="{sx + 24}" y1="{sy + round(sh * 0.66)}" x2="{sx + sw - 24}" y2="{sy + round(sh * 0.66)}"/>
+          </g>"""
+        if backdrop == "mountain_horizon":
+            return f'<path d="M{sx + 36} {sy + sh - 54} L{sx + round(sw * 0.22)} {sy + sh - 165} L{sx + round(sw * 0.42)} {sy + sh - 78} L{sx + round(sw * 0.68)} {sy + sh - 210} L{sx + sw - 36} {sy + sh - 54} Z" fill="{fg_color}" fill-opacity="0.06"/>'
+        if backdrop == "city_skyline":
+            return f'<path d="M{sx + 48} {sy + sh - 54} V{sy + sh - 150} H{sx + 130} V{sy + sh - 110} H{sx + 220} V{sy + sh - 190} H{sx + 320} V{sy + sh - 130} H{sx + round(sw * 0.72)} V{sy + sh - 175} H{sx + round(sw * 0.85)} V{sy + sh - 54} Z" fill="{fg_color}" fill-opacity="0.06"/>'
+        if backdrop == "library_arch":
+            return f"""
+          <g opacity="0.1" fill="none" stroke="{fg_color}" stroke-width="3">
+            <path d="M{sx + 90} {sy + sh - 54} V{sy + 140} A90 90 0 0 1 {sx + 270} {sy + 140} V{sy + sh - 54}"/>
+            <path d="M{sx + sw - 270} {sy + sh - 54} V{sy + 140} A90 90 0 0 1 {sx + sw - 90} {sy + 140} V{sy + sh - 54}"/>
+          </g>"""
+        if backdrop == "night_stars":
+            return f"""
+          <g fill="{hi_color}" fill-opacity="0.28">
+            <circle cx="{sx + 110}" cy="{sy + 86}" r="4"/><circle cx="{sx + 240}" cy="{sy + 144}" r="3"/>
+            <circle cx="{sx + sw - 120}" cy="{sy + 92}" r="4.5"/><circle cx="{sx + sw - 260}" cy="{sy + 162}" r="3"/>
+            <circle cx="{sx + round(sw * 0.52)}" cy="{sy + 72}" r="3.5"/>
+          </g>"""
+        if backdrop == "zen_ripples":
+            return f"""
+          <g fill="none" stroke="{hi_color}" stroke-opacity="0.12" stroke-width="2.5">
+            <circle cx="{sx + round(sw / 2)}" cy="{sy + round(sh / 2)}" r="150"/>
+            <circle cx="{sx + round(sw / 2)}" cy="{sy + round(sh / 2)}" r="230" stroke-dasharray="12 10"/>
+          </g>"""
+        if backdrop == "diagonal_rain":
+            return f"""
+          <g stroke="{fg_color}" stroke-opacity="0.09" stroke-width="3" stroke-linecap="round">
+            <line x1="{sx + 120}" y1="{sy + 50}" x2="{sx + 80}" y2="{sy + 130}"/>
+            <line x1="{sx + sw - 140}" y1="{sy + 60}" x2="{sx + sw - 180}" y2="{sy + 140}"/>
+            <line x1="{sx + round(sw * 0.45)}" y1="{sy + 44}" x2="{sx + round(sw * 0.45) - 40}" y2="{sy + 118}"/>
+          </g>"""
+        return ""
+
+    inner_backdrop_svg = _render_stage_backdrop_pattern(
+        stage_backdrop_style,
+        stage_x,
+        stage_y,
+        stage_w,
+        stage_h,
+        surface if (is_full_bleed or is_dark_contrast) else ink,
+        accent,
+    )
+
+    if is_full_bleed:
+        stage_frame_svg = f"""
+    <g id="stage-full-bleed">
+      <rect x="0" y="0" width="{vb_w}" height="{caption_box_y - 12}" fill="{ink}"/>
+      {inner_backdrop_svg}
+      <circle cx="{stage_mid_x if is_vertical else 978}" cy="{(stage_y + 448) if is_vertical else round((stage_y + caption_box_y - 12) * 0.52)}" r="{245 if is_vertical else 300}" fill="{surface}" fill-opacity="0.06"/>
+      <circle cx="{stage_mid_x if is_vertical else 978}" cy="{(stage_y + 448) if is_vertical else round((stage_y + caption_box_y - 12) * 0.52)}" r="{195 if is_vertical else 225}" fill="{accent}" fill-opacity="0.16"/>
+      <line x1="0" y1="{caption_box_y - 14}" x2="{vb_w}" y2="{caption_box_y - 14}" stroke="{accent}" stroke-width="5"/>
+    </g>"""
+    elif is_dark_contrast:
+        stage_frame_svg = f"""
+    <g id="stage-dark-contrast">
+      <rect x="{stage_x + 8}" y="{stage_y + 8}" width="{stage_w}" height="{stage_h}" rx="28" fill="{ink}" fill-opacity="0.16"/>
+      <rect x="{stage_x}" y="{stage_y}" width="{stage_w}" height="{stage_h}" rx="28" fill="{ink}" stroke="{accent}" stroke-width="4.5"/>
+      {inner_backdrop_svg}
+      <line x1="{stage_x + 42}" y1="{stage_y + stage_h - 54}" x2="{stage_x + stage_w - 42}" y2="{stage_y + stage_h - 54}" stroke="{surface}" stroke-width="2" stroke-opacity="0.2" stroke-linecap="round"/>
+    </g>"""
+    else:
+        stage_frame_svg = f"""
+    <g id="stage-card">
+      <rect x="{stage_x + 8}" y="{stage_y + 8}" width="{stage_w}" height="{stage_h}" rx="28" fill="{ink}" fill-opacity="0.08"/>
+      <rect x="{stage_x}" y="{stage_y}" width="{stage_w}" height="{stage_h}" rx="28" fill="{surface}" stroke="{ink}" stroke-width="4"/>
+      {inner_backdrop_svg}
+      <line x1="{stage_x + 42}" y1="{stage_y + stage_h - 54}" x2="{stage_x + stage_w - 42}" y2="{stage_y + stage_h - 54}" stroke="{ink}" stroke-width="2.5" stroke-opacity="0.18" stroke-linecap="round"/>
+    </g>"""
 
     char_scale = 0.96 if is_vertical else 1.04
     prop_scale = 0.94 if is_vertical else 1.06
@@ -1458,15 +2053,149 @@ def render_studio_shot_svg(
     beat2_svg = ""
     beat3_svg = ""
 
-    comp = blueprint.composition
-    if comp == "center_metaphor":
+    if comp == "full_bleed_hook":
+        dark_bottom = caption_box_y - 12
+        hero_x = stage_mid_x if is_vertical else 978
+        hero_disc_y = (stage_y + 448) if is_vertical else round((stage_y + dark_bottom) / 2) + 8
+        hero_disc_r = 160 if is_vertical else 180
+        hook_head_lines = _wrap_text_lines((blueprint.caption or "ĐIỂM MẤU CHỐT").upper(), 18 if is_vertical else 15, 3)
+        text_x = stage_mid_x if is_vertical else 76
+        text_anchor = "middle" if is_vertical else "start"
+        tag_y = (stage_y + 26) if is_vertical else (stage_y + 42)
+        text_start_y = (tag_y + 82) if is_vertical else (tag_y + 94)
+        line_h = 46 if is_vertical else 54
+        font_sz = 38 if is_vertical else 44
+        tag_text = (blueprint.left_badge or blueprint.chapter_header or "ĐIỂM MẤU CHỐT")[:22]
+        bar_y = text_start_y + max(1, len(hook_head_lines)) * line_h + 10
+
+        beat1_svg = f"""
+        <rect x="{stage_mid_x - 135 if is_vertical else 76}" y="{tag_y}" width="270" height="38" rx="19" fill="{accent}"/>
+        <text x="{stage_mid_x if is_vertical else 211}" y="{tag_y + 25}" text-anchor="middle" font-family="{FONT_FAMILY}" font-size="18" font-weight="800" fill="{surface}">{_escape_xml(tag_text)}</text>
+        {_render_multiline_text(hook_head_lines, text_x, text_start_y, line_h, font_sz, surface, "800", text_anchor)}
+        <rect x="{stage_mid_x - 70 if is_vertical else 76}" y="{bar_y}" width="140" height="7" rx="3.5" fill="{accent}"/>
+        """
+        beat2_svg = f"""
+        <circle cx="{hero_x}" cy="{hero_disc_y}" r="{hero_disc_r}" fill="{surface}" fill-opacity="0.98" stroke="{accent}" stroke-width="5"/>
+        <circle cx="{hero_x}" cy="{hero_disc_y}" r="{hero_disc_r - 12}" fill="{accent}" fill-opacity="0.06" stroke="{accent}" stroke-width="2" stroke-dasharray="10 8"/>
+        {_render_studio_character(hero_x, hero_disc_y - 12, blueprint.character_pose, blueprint.character_expression, theme, scale=0.88 if is_vertical else 0.96, flip_x=not is_vertical, character_style=char_style)}
+        """
+        prop_badge_x = stage_mid_x if is_vertical else 638
+        prop_badge_y = (stage_y + 704) if is_vertical else (dark_bottom - 122)
+        prop_badge_r = 68 if is_vertical else 72
+        ov_part = (
+            _render_overlay_effect(blueprint.overlay_effect, prop_badge_x + 54, prop_badge_y - 52, theme)
+            if blueprint.overlay_effect != "none"
+            else ""
+        )
+        beat3_svg = f"""
+        <circle cx="{prop_badge_x}" cy="{prop_badge_y}" r="{prop_badge_r}" fill="{surface}" fill-opacity="0.98" stroke="{accent}" stroke-width="4.5"/>
+        {_render_studio_prop(blueprint.primary_prop, prop_badge_x, prop_badge_y, 0.42 if is_vertical else 0.44, theme, blueprint.custom_prop_svg)}
+        {ov_part}
+        """
+
+    elif comp == "dark_contrast_insight":
+        left_x = stage_mid_x if is_vertical else stage_x + round(stage_w * 0.28)
+        left_y = (stage_y + round(stage_h * 0.27)) if is_vertical else stage_mid_y + 12
+        right_x = stage_mid_x if is_vertical else stage_x + round(stage_w * 0.72)
+        right_y = (stage_y + round(stage_h * 0.75)) if is_vertical else stage_mid_y + 6
+        hero_disc_r = 136 if is_vertical else 160
+        warn_tag = (blueprint.left_badge or "CẦN NHẬN DIỆN")[:22]
+        ov_eff = "big_x_crossout" if blueprint.overlay_effect == "none" else blueprint.overlay_effect
+        mid_ov_y = (stage_y + round(stage_h * 0.49)) if is_vertical else stage_mid_y
+
+        beat1_svg = f"""
+        <rect x="{left_x - 120}" y="{stage_y + 22}" width="240" height="36" rx="18" fill="{accent}"/>
+        <text x="{left_x}" y="{stage_y + 46}" text-anchor="middle" font-family="{FONT_FAMILY}" font-size="18" font-weight="800" fill="{surface}">{_escape_xml(warn_tag)}</text>
+        <circle cx="{left_x}" cy="{left_y + 18}" r="{96 if is_vertical else 120}" fill="{surface}" fill-opacity="0.98" stroke="{accent}" stroke-width="4.5"/>
+        {_render_studio_prop(blueprint.primary_prop, left_x, left_y + 18, 0.58 if is_vertical else 0.72, theme, blueprint.custom_prop_svg)}
+        """
+        beat2_svg = f"""
+        <circle cx="{stage_mid_x}" cy="{mid_ov_y}" r="36" fill="{surface}" fill-opacity="0.95" stroke="{accent}" stroke-width="3.5"/>
+        {_render_overlay_effect(ov_eff, stage_mid_x, mid_ov_y, theme)}
+        """
+        beat3_svg = f"""
+        <circle cx="{right_x}" cy="{right_y + 8}" r="{hero_disc_r}" fill="{surface}" fill-opacity="0.98" stroke="{accent}" stroke-width="4.5"/>
+        <circle cx="{right_x}" cy="{right_y + 8}" r="{hero_disc_r - 11}" fill="{accent}" fill-opacity="0.06"/>
+        {_render_studio_character(right_x, right_y - 4, blueprint.character_pose, blueprint.character_expression, theme, scale=0.78 if is_vertical else 0.90, flip_x=not is_vertical, character_style=char_style)}
+        """
+
+    elif comp == "quote_spotlight":
+        quote_text = (blueprint.sub_phrase if (blueprint.sub_phrase and len(blueprint.sub_phrase) > 10) else blueprint.caption) or ""
+        q_lines = _wrap_text_lines(quote_text, 26 if is_vertical else 30, 3)
+        q_font = (30 if is_vertical else 32) if len(q_lines) >= 3 else (34 if is_vertical else 36)
+        q_start_y = (stage_y + 185) if is_vertical else stage_mid_y - round(max(0, len(q_lines) - 1) * 22)
+        text_center_x = stage_mid_x if is_vertical else stage_x + round(stage_w * 0.38)
+        bust_x = stage_mid_x if is_vertical else stage_x + round(stage_w * 0.80)
+        bust_y = (stage_y + round(stage_h * 0.72)) if is_vertical else stage_mid_y + 20
+        bust_r = 128 if is_vertical else 138
+        tag_label = (blueprint.left_badge or "TRIẾT LÝ SỐNG")[:22]
+
+        beat1_svg = f"""
+        <rect x="{stage_x + 26}" y="{stage_y + 26}" width="{stage_w - 52}" height="{stage_h - 52}" rx="22" fill="{bg}" fill-opacity="0.55" stroke="{ink}" stroke-width="2" stroke-opacity="0.14"/>
+        <text x="{stage_x + (66 if is_vertical else 68)}" y="{stage_y + (124 if is_vertical else 132)}" font-family="{FONT_FAMILY}" font-size="140" font-weight="800" fill="{accent}" fill-opacity="0.22">“</text>
+        {_render_multiline_text(q_lines, text_center_x, q_start_y, 46, q_font, ink, "800", "middle")}
+        """
+        beat2_svg = f"""
+        <rect x="{text_center_x - 96}" y="{q_start_y + len(q_lines) * 46 + 10}" width="192" height="6" rx="3" fill="{accent}"/>
+        <rect x="{text_center_x - 125}" y="{q_start_y + len(q_lines) * 46 + 34}" width="250" height="36" rx="18" fill="{accent}" fill-opacity="0.14" stroke="{accent}" stroke-width="2.5"/>
+        <text x="{text_center_x}" y="{q_start_y + len(q_lines) * 46 + 58}" text-anchor="middle" font-family="{FONT_FAMILY}" font-size="18" font-weight="800" fill="{accent}">{_escape_xml(tag_label)}</text>
+        """
+        beat3_svg = f"""
+        <defs>
+          <clipPath id="clip-quote-bust">
+            <circle cx="{bust_x}" cy="{bust_y - 18}" r="{bust_r - 3}"/>
+          </clipPath>
+        </defs>
+        <circle cx="{bust_x}" cy="{bust_y - 18}" r="{bust_r}" fill="{surface}" stroke="{accent}" stroke-width="4.5"/>
+        <g clip-path="url(#clip-quote-bust)">
+          {_render_studio_character(bust_x, bust_y + 14, blueprint.character_pose, blueprint.character_expression, theme, scale=1.02 if is_vertical else 1.12, flip_x=not is_vertical, character_style=char_style, waist_up=True)}
+        </g>
+        <circle cx="{bust_x}" cy="{bust_y - 18}" r="{bust_r}" fill="none" stroke="{accent}" stroke-width="4.5"/>
+        """
+
+    elif comp == "closeup_portrait":
+        portrait_x = stage_mid_x if is_vertical else stage_x + round(stage_w * 0.36)
+        portrait_y = (stage_y + round(stage_h * 0.44)) if is_vertical else stage_mid_y + 42
+        portrait_r = 154 if is_vertical else 168
+        prop_x = stage_mid_x if is_vertical else stage_x + round(stage_w * 0.78)
+        prop_y = (stage_y + round(stage_h * 0.80)) if is_vertical else stage_mid_y - 12
+
+        beat1_svg = f"""
+        <circle cx="{portrait_x}" cy="{portrait_y - 34}" r="{188 if is_vertical else 204}" fill="{accent}" fill-opacity="0.08"/>
+        <circle cx="{portrait_x}" cy="{portrait_y - 34}" r="{portrait_r}" fill="{bg}" stroke="{accent}" stroke-width="3.5" stroke-dasharray="10 8"/>
+        """
+        beat2_svg = f"""
+        <defs>
+          <clipPath id="clip-closeup-bust">
+            <circle cx="{portrait_x}" cy="{portrait_y - 34}" r="{portrait_r - 3}"/>
+          </clipPath>
+        </defs>
+        <g clip-path="url(#clip-closeup-bust)">
+          {_render_studio_character(portrait_x, portrait_y + 10, blueprint.character_pose, blueprint.character_expression, theme, scale=1.50 if is_vertical else 1.66, character_style=char_style, waist_up=True)}
+        </g>
+        <circle cx="{portrait_x}" cy="{portrait_y - 34}" r="{portrait_r}" fill="none" stroke="{accent}" stroke-width="3.5"/>
+        """
+        ov_part = (
+            _render_overlay_effect(blueprint.overlay_effect, prop_x + 76, prop_y - 76, theme)
+            if blueprint.overlay_effect != "none"
+            else ""
+        )
+        beat3_svg = f"""
+        <circle cx="{prop_x}" cy="{prop_y}" r="{84 if is_vertical else 98}" fill="{surface}" stroke="{ink}" stroke-width="4"/>
+        {_render_studio_prop(blueprint.primary_prop, prop_x, prop_y, 0.52 if is_vertical else 0.62, theme, blueprint.custom_prop_svg)}
+        {ov_part}
+        """
+
+    elif comp == "center_metaphor":
         beat1_svg = _render_studio_prop(
-            blueprint.primary_prop, stage_mid_x, stage_mid_y - 4, 1.24 if is_vertical else 1.38, theme
+            blueprint.primary_prop, stage_mid_x, stage_mid_y - 4, 1.24 if is_vertical else 1.38, theme, blueprint.custom_prop_svg
         )
         if blueprint.overlay_effect != "none":
             ov_x = stage_mid_x if blueprint.overlay_effect == "shield_aura" else stage_mid_x + (145 if is_vertical else 225)
             ov_y = stage_mid_y - 4 if blueprint.overlay_effect == "shield_aura" else stage_mid_y - 95
             beat2_svg = _render_overlay_effect(blueprint.overlay_effect, ov_x, ov_y, theme)
+        else:
+            beat2_svg = f'<circle cx="{stage_mid_x}" cy="{stage_mid_y - 4}" r="142" fill="none" stroke="{accent}" stroke-width="3" stroke-dasharray="12 10" stroke-opacity="0.45"/>'
         if blueprint.right_badge:
             beat3_svg = (
                 f'<rect x="{stage_mid_x - 165}" y="{stage_y + 26}" width="330" height="44" rx="22" fill="{accent}" fill-opacity="0.14" stroke="{accent}" stroke-width="3"/>'
@@ -1483,7 +2212,7 @@ def render_studio_shot_svg(
         left_y = stage_y + round(stage_h * 0.28) if is_vertical else stage_mid_y - 8
         right_x = stage_mid_x if is_vertical else stage_x + round(stage_w * 0.72)
         right_y = stage_y + round(stage_h * 0.72) if is_vertical else stage_mid_y + 24
-        beat1_svg = _render_studio_prop(blueprint.primary_prop, left_x, left_y, prop_scale, theme)
+        beat1_svg = _render_studio_prop(blueprint.primary_prop, left_x, left_y, prop_scale, theme, blueprint.custom_prop_svg)
         ov_eff = "curved_arrow_right" if blueprint.overlay_effect == "none" else blueprint.overlay_effect
         ov_x = left_x if blueprint.overlay_effect == "big_x_crossout" else stage_mid_x
         ov_y = left_y if blueprint.overlay_effect == "big_x_crossout" else stage_mid_y - 12
@@ -1511,10 +2240,10 @@ def render_studio_shot_svg(
         <rect x="{left_px}" y="{left_py}" width="{panel_w}" height="{panel_h}" rx="20" fill="{bg}" stroke="{ink}" stroke-width="3.5" stroke-dasharray="10 6"/>
         <rect x="{left_mid_x - 120}" y="{left_py + 18}" width="240" height="40" rx="20" fill="{surface}" stroke="{ink}" stroke-width="3"/>
         <text x="{left_mid_x}" y="{left_py + 45}" text-anchor="middle" font-family="{FONT_FAMILY}" font-size="20" font-weight="700" fill="{ink}">{_escape_xml(left_tag)}</text>
-        {_render_studio_prop(blueprint.primary_prop, left_mid_x, left_mid_y + 22, 0.72 if is_vertical else 0.88, theme)}
+        {_render_studio_prop(blueprint.primary_prop, left_mid_x, left_mid_y + 22, 0.72 if is_vertical else 0.88, theme, blueprint.custom_prop_svg)}
         """
         beat2_svg = f"""
-        {_render_overlay_effect("big_x_crossout", left_mid_x + round(panel_w * 0.28), left_py + 88, theme)}
+        {_render_overlay_effect("big_x_crossout", left_mid_x + round(panel_w * 0.28), left_py + (116 if is_vertical else 124), theme)}
         <circle cx="{stage_mid_x}" cy="{stage_mid_y}" r="34" fill="{accent}" stroke="{surface}" stroke-width="5"/>
         <path d="M{stage_mid_x - 12} {stage_mid_y} L{stage_mid_x + 12} {stage_mid_y} M{stage_mid_x + 2} {stage_mid_y - 10} L{stage_mid_x + 14} {stage_mid_y} L{stage_mid_x + 2} {stage_mid_y + 10}" fill="none" stroke="{surface}" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>
         """
@@ -1544,21 +2273,22 @@ def render_studio_shot_svg(
         )
 
     elif comp == "two_characters_interaction":
-        left_x = stage_mid_x - 135 if is_vertical else stage_x + round(stage_w * 0.23)
-        right_x = stage_mid_x + 135 if is_vertical else stage_x + round(stage_w * 0.77)
-        char_y = stage_mid_y + 26
+        left_x = (stage_mid_x - 145) if is_vertical else stage_x + round(stage_w * 0.23)
+        right_x = (stage_mid_x + 145) if is_vertical else stage_x + round(stage_w * 0.77)
+        char_y = (stage_y + 545) if is_vertical else stage_mid_y + 26
+        mid_prop_y = (stage_y + 160) if is_vertical else stage_mid_y - 38
         beat1_svg = _render_studio_character(
             left_x,
             char_y,
             blueprint.secondary_pose or "pointing_accuse",
             blueprint.secondary_expression or "angry",
             theme,
-            scale=0.82 if is_vertical else 0.96,
+            scale=0.78 if is_vertical else 0.96,
             accent_tie=False,
             character_style=char_style,
         )
         beat2_svg = _render_studio_prop(
-            blueprint.primary_prop, stage_mid_x, stage_mid_y - 38, 0.62 if is_vertical else 0.84, theme
+            blueprint.primary_prop, stage_mid_x, mid_prop_y, 0.68 if is_vertical else 0.84, theme, blueprint.custom_prop_svg
         )
         beat3_svg = _render_studio_character(
             right_x,
@@ -1566,7 +2296,7 @@ def render_studio_shot_svg(
             blueprint.character_pose,
             blueprint.character_expression,
             theme,
-            scale=0.82 if is_vertical else 0.98,
+            scale=0.78 if is_vertical else 0.98,
             flip_x=True,
             accent_tie=True,
             character_style=char_style,
@@ -1579,7 +2309,9 @@ def render_studio_shot_svg(
         <line x1="{stage_mid_x - 110}" y1="{pedestal_y + 28}" x2="{stage_mid_x + 110}" y2="{pedestal_y + 28}" stroke="{accent}" stroke-width="5" stroke-linecap="round"/>
         """
         ov_eff = "shield_aura" if blueprint.overlay_effect == "none" else blueprint.overlay_effect
-        beat2_svg = _render_overlay_effect(ov_eff, stage_mid_x, stage_mid_y - 26, theme)
+        beat2_svg = _render_overlay_effect(
+            ov_eff, stage_mid_x, (pedestal_y - 170) if is_vertical else (stage_mid_y - 26), theme
+        )
         beat3_svg = (
             _render_studio_character(
                 stage_mid_x,
@@ -1587,15 +2319,16 @@ def render_studio_shot_svg(
                 blueprint.character_pose,
                 blueprint.character_expression,
                 theme,
-                scale=0.90 if is_vertical else 0.94,
+                scale=0.88 if is_vertical else 0.94,
                 character_style=char_style,
             )
             + _render_studio_prop(
                 blueprint.primary_prop,
-                stage_mid_x + (175 if is_vertical else 275),
-                stage_mid_y - 28,
-                0.56 if is_vertical else 0.72,
+                stage_mid_x + (168 if is_vertical else 275),
+                (stage_y + 142) if is_vertical else (stage_mid_y - 28),
+                0.54 if is_vertical else 0.72,
                 theme,
+                blueprint.custom_prop_svg,
             )
         )
 
@@ -1620,6 +2353,8 @@ def render_studio_shot_svg(
                 f'M{char_x + 115} {stage_mid_y - 10} L{cards_x - 24} {card_start_y + 302}" '
                 f'stroke="{accent}" stroke-width="5" stroke-linecap="round" stroke-dasharray="10 8"/>'
             )
+        else:
+            beat2_svg = f'<line x1="{stage_x + 80}" y1="{stage_y + 365}" x2="{stage_x + stage_w - 80}" y2="{stage_y + 365}" stroke="{accent}" stroke-width="4" stroke-dasharray="10 8" stroke-linecap="round"/>'
         rows: List[str] = []
         for s_idx, label in enumerate(step_labels[:3]):
             row_y = card_start_y + s_idx * 124
@@ -1631,6 +2366,164 @@ def render_studio_shot_svg(
                 f'<text x="{cards_x + 90}" y="{row_y + 57}" text-anchor="start" font-family="{FONT_FAMILY}" font-size="24" font-weight="700" fill="{ink}">{_escape_xml(clean_label[:30])}</text>'
             )
         beat3_svg = "\n".join(rows)
+
+    elif comp == "timeline_progression":
+        node_labels = blueprint.step_items or [
+            blueprint.left_badge or "1. Nhận diện",
+            "2. Tĩnh lặng",
+            blueprint.right_badge or "3. Hành động",
+        ]
+        nodes = node_labels[:3]
+        if is_vertical:
+            line_x = stage_x + 92
+            beat1_svg = _render_studio_character(
+                stage_mid_x + 125, stage_y + 210, blueprint.character_pose, blueprint.character_expression, theme, scale=0.78, character_style=char_style
+            )
+            node_parts = []
+            for idx_n, label in enumerate(nodes):
+                ny = stage_y + 165 + idx_n * 195
+                clean = re.sub(r"^\d+\.\s*", "", label)
+                node_parts.append(
+                    f'<circle cx="{line_x}" cy="{ny}" r="24" fill="{accent}" stroke="{surface}" stroke-width="4"/>'
+                    f'<text x="{line_x}" y="{ny + 8}" text-anchor="middle" font-family="{FONT_FAMILY}" font-size="22" font-weight="800" fill="{surface}">{idx_n + 1}</text>'
+                    f'<rect x="{line_x + 42}" y="{ny - 34}" width="{stage_w - 170}" height="68" rx="16" fill="{bg}" stroke="{ink}" stroke-width="3.5"/>'
+                    f'<text x="{line_x + 64}" y="{ny + 8}" text-anchor="start" font-family="{FONT_FAMILY}" font-size="22" font-weight="700" fill="{ink}">{_escape_xml(clean[:24])}</text>'
+                )
+            beat2_svg = (
+                f'<line x1="{line_x}" y1="{stage_y + 120}" x2="{line_x}" y2="{stage_y + 620}" stroke="{accent}" stroke-width="6" stroke-dasharray="10 8" stroke-linecap="round"/>\n'
+                + "\n".join(node_parts)
+            )
+            beat3_svg = _render_studio_prop(
+                blueprint.primary_prop, stage_mid_x + 135, stage_y + 650, 0.66, theme, blueprint.custom_prop_svg
+            )
+        else:
+            start_x = stage_x + 190
+            step_gap = 370
+            track_y = stage_y + 332
+            node_parts = []
+            for idx_n, label in enumerate(nodes):
+                nx = start_x + idx_n * step_gap
+                clean = re.sub(r"^\d+\.\s*", "", label)
+                node_parts.append(
+                    f'<circle cx="{nx}" cy="{track_y}" r="28" fill="{accent}" stroke="{surface}" stroke-width="5"/>'
+                    f'<text x="{nx}" y="{track_y + 9}" text-anchor="middle" font-family="{FONT_FAMILY}" font-size="24" font-weight="800" fill="{surface}">{idx_n + 1}</text>'
+                    f'<rect x="{nx - 125}" y="{track_y + 46}" width="250" height="54" rx="16" fill="{bg}" stroke="{ink}" stroke-width="3.5"/>'
+                    f'<text x="{nx}" y="{track_y + 80}" text-anchor="middle" font-family="{FONT_FAMILY}" font-size="20" font-weight="700" fill="{ink}">{_escape_xml(clean[:22])}</text>'
+                )
+            beat1_svg = (
+                f'<line x1="{start_x}" y1="{track_y}" x2="{start_x + step_gap * 2}" y2="{track_y}" stroke="{accent}" stroke-width="7" stroke-dasharray="12 10" stroke-linecap="round"/>\n'
+                + "\n".join(node_parts)
+            )
+            beat2_svg = _render_studio_prop(
+                blueprint.primary_prop, stage_mid_x + 185, stage_y + 148, 0.68, theme, blueprint.custom_prop_svg
+            )
+            beat3_svg = _render_studio_character(
+                stage_mid_x - 185, stage_y + 178, blueprint.character_pose, blueprint.character_expression, theme, scale=0.72, character_style=char_style
+            )
+
+    elif comp == "stat_callout_card":
+        metric = (blueprint.focal_metric or blueprint.left_badge or "90%")[:12].upper()
+        sub_badge = (blueprint.right_badge or "ĐIỂM MẤU CHỐT")[:22]
+        card_x = stage_x + (48 if is_vertical else 56)
+        card_y = stage_y + (48 if is_vertical else 62)
+        card_w = (stage_w - 96) if is_vertical else round(stage_w * 0.44)
+        card_h = 260 if is_vertical else (stage_h - 124)
+        card_mid_x = round(card_x + card_w / 2)
+        card_mid_y = round(card_y + card_h / 2)
+        metric_fs = 64 if len(metric) > 5 else 88
+
+        beat1_svg = f"""
+        <rect x="{card_x + 10}" y="{card_y + 10}" width="{card_w}" height="{card_h}" rx="24" fill="{ink}" fill-opacity="0.14"/>
+        <rect x="{card_x}" y="{card_y}" width="{card_w}" height="{card_h}" rx="24" fill="{accent}"/>
+        <rect x="{card_mid_x - 115}" y="{card_y + 28}" width="230" height="36" rx="18" fill="{surface}" fill-opacity="0.2"/>
+        <text x="{card_mid_x}" y="{card_y + 52}" text-anchor="middle" font-family="{FONT_FAMILY}" font-size="18" font-weight="800" fill="{surface}">{_escape_xml(sub_badge)}</text>
+        <text x="{card_mid_x}" y="{card_mid_y + 24}" text-anchor="middle" font-family="{FONT_FAMILY}" font-size="{metric_fs}" font-weight="900" fill="{surface}">{_escape_xml(metric)}</text>
+        """
+        beat2_svg = _render_studio_prop(
+            blueprint.primary_prop,
+            (stage_mid_x - 150) if is_vertical else stage_x + round(stage_w * 0.82),
+            (stage_y + 650) if is_vertical else (stage_y + 148),
+            0.62 if is_vertical else 0.68,
+            theme,
+            blueprint.custom_prop_svg,
+        )
+        beat3_svg = _render_studio_character(
+            (stage_mid_x + 120) if is_vertical else stage_x + round(stage_w * 0.66),
+            (stage_y + 545) if is_vertical else (stage_mid_y + 34),
+            blueprint.character_pose,
+            blueprint.character_expression,
+            theme,
+            scale=0.88 if is_vertical else 0.96,
+            flip_x=True,
+            character_style=char_style,
+        )
+
+    elif comp == "dialogue_debate":
+        left_bubble = (blueprint.left_badge or "Phản xạ vội")[:22]
+        right_bubble = (blueprint.right_badge or "Bình tĩnh chọn")[:22]
+        left_x = (stage_mid_x - 145) if is_vertical else stage_x + round(stage_w * 0.24)
+        right_x = (stage_mid_x + 145) if is_vertical else stage_x + round(stage_w * 0.76)
+        char_y = (stage_y + 545) if is_vertical else stage_mid_y + 58
+        bubble_y = (stage_y + 95) if is_vertical else stage_y + 44
+
+        beat1_svg = f"""
+        <rect x="{left_x - 125}" y="{bubble_y}" width="250" height="58" rx="18" fill="{bg}" stroke="{ink}" stroke-width="4"/>
+        <text x="{left_x}" y="{bubble_y + 36}" text-anchor="middle" font-family="{FONT_FAMILY}" font-size="20" font-weight="800" fill="{ink}">{_escape_xml(left_bubble)}</text>
+        {_render_studio_character(left_x, char_y, blueprint.secondary_pose or "pointing_accuse", blueprint.secondary_expression or "angry", theme, scale=0.76 if is_vertical else 0.90, accent_tie=False, character_style=char_style)}
+        """
+        mid_prop_cy = (stage_y + 265) if is_vertical else stage_mid_y - 26
+        beat2_svg = f"""
+        <circle cx="{stage_mid_x}" cy="{mid_prop_cy}" r="{82 if is_vertical else 92}" fill="{surface}" stroke="{accent}" stroke-width="4"/>
+        {_render_studio_prop(blueprint.primary_prop, stage_mid_x, mid_prop_cy, 0.50 if is_vertical else 0.58, theme, blueprint.custom_prop_svg)}
+        """
+        beat3_svg = f"""
+        <rect x="{right_x - 125}" y="{bubble_y}" width="250" height="58" rx="18" fill="{accent}"/>
+        <text x="{right_x}" y="{bubble_y + 36}" text-anchor="middle" font-family="{FONT_FAMILY}" font-size="20" font-weight="800" fill="{surface}">{_escape_xml(right_bubble)}</text>
+        {_render_studio_character(right_x, char_y, blueprint.character_pose, blueprint.character_expression, theme, scale=0.76 if is_vertical else 0.92, flip_x=True, accent_tie=True, character_style=char_style)}
+        """
+
+    elif comp == "ai_bespoke_scene":
+        sanitized_scene = sanitize_custom_vector_fragment(blueprint.custom_scene_svg, theme)
+        if sanitized_scene:
+            scene_box_w = stage_w - 64
+            scene_box_h = 440 if is_vertical else (stage_h - 72)
+            scale_scene = min(scene_box_w / 1000.0, scene_box_h / 420.0)
+            offset_x = round(stage_x + (stage_w - 1000.0 * scale_scene) / 2.0)
+            offset_y = (stage_y + 56) if is_vertical else round(stage_y + (stage_h - 420.0 * scale_scene) / 2.0)
+
+            beat1_svg = f'<rect x="{stage_x + 26}" y="{stage_y + 26}" width="{stage_w - 52}" height="{stage_h - 52}" rx="20" fill="{bg}" fill-opacity="0.45"/>'
+            beat2_svg = f'<g transform="translate({offset_x}, {offset_y}) scale({scale_scene:.4f})">{sanitized_scene}</g>'
+            cx_avatar = stage_mid_x if is_vertical else (stage_x + stage_w - 135)
+            cy_avatar = (stage_y + 615) if is_vertical else (stage_y + stage_h - 132)
+            beat3_svg = f"""
+            <circle cx="{cx_avatar}" cy="{cy_avatar}" r="{112 if is_vertical else 96}" fill="{surface}" stroke="{accent}" stroke-width="4.5"/>
+            {_render_studio_character(cx_avatar, cy_avatar + 10, blueprint.character_pose, blueprint.character_expression, theme, scale=0.62 if is_vertical else 0.54, flip_x=True, character_style=char_style, waist_up=True)}
+            """
+        else:
+            beat1_svg = _render_studio_prop(
+                blueprint.secondary_prop or "sunrise_horizon",
+                stage_mid_x if is_vertical else stage_x + round(stage_w * 0.72),
+                stage_y + round(stage_h * 0.28) if is_vertical else stage_mid_y - 12,
+                0.92 if is_vertical else 1.04,
+                theme,
+            )
+            beat2_svg = _render_studio_prop(
+                blueprint.primary_prop,
+                stage_mid_x if is_vertical else stage_x + round(stage_w * 0.44),
+                stage_y + round(stage_h * 0.54) if is_vertical else stage_mid_y + 8,
+                0.88 if is_vertical else 0.98,
+                theme,
+                blueprint.custom_prop_svg,
+            )
+            beat3_svg = _render_studio_character(
+                stage_mid_x if is_vertical else stage_x + round(stage_w * 0.22),
+                stage_y + round(stage_h * 0.78) if is_vertical else stage_mid_y + 28,
+                blueprint.character_pose,
+                blueprint.character_expression,
+                theme,
+                scale=0.86 if is_vertical else 0.96,
+                character_style=char_style,
+            )
 
     else:  # character_left_prop_right
         left_x = stage_mid_x if is_vertical else stage_x + round(stage_w * 0.28)
@@ -1646,10 +2539,10 @@ def render_studio_shot_svg(
             beat2_svg = _render_overlay_effect(blueprint.overlay_effect, ov_x, ov_y, theme)
         else:
             beat2_svg = f'<path d="M{left_x + 115} {stage_mid_y} L{right_x - 150} {stage_mid_y}" stroke="{accent}" stroke-width="5" stroke-dasharray="10 8" stroke-linecap="round"/>'
-        beat3_svg = _render_studio_prop(blueprint.primary_prop, right_x, right_y, prop_scale, theme)
+        beat3_svg = _render_studio_prop(
+            blueprint.primary_prop, right_x, right_y, prop_scale, theme, blueprint.custom_prop_svg
+        )
 
-    caption_box_y = stage_y + stage_h + 22
-    caption_box_h = vb_h - caption_box_y - 24
     caption_lines = _wrap_text_lines(blueprint.caption, 24 if is_vertical else 38, 2)
     caption_font_size = (30 if is_vertical else 32) if len(caption_lines) > 1 else (34 if is_vertical else 38)
     caption_text_start_y = (
@@ -1667,9 +2560,9 @@ def render_studio_shot_svg(
 
     return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {vb_w} {vb_h}" width="{vb_w}" height="{vb_h}">
   {backdrop_decor}
+  {stage_frame_svg}
   {header_svg}
   {beat_counter_svg}
-  {stage_frame_svg}
   <g id="beat-1">{beat1_svg}</g>
   <g id="beat-2">{beat2_svg}</g>
   <g id="beat-3">{beat3_svg}</g>

@@ -13,8 +13,11 @@ import logging
 import math
 import random
 import subprocess
+import wave
 from pathlib import Path
 from typing import List, Optional, Tuple
+
+import numpy as np
 
 import config
 
@@ -139,8 +142,12 @@ def render_scene_clip(
     ass_filter = ""
     if narration_text and narration_text.strip():
         try:
-            from src.studio_motion_renderer import write_progressive_ass_subtitle
+            from src.studio_motion_renderer import (
+                extract_audio_energy_envelope,
+                write_progressive_ass_subtitle,
+            )
 
+            env = extract_audio_energy_envelope(audio_path, samples_per_sec=30)
             ass_path = output_clip_path.with_suffix(".ass")
             write_progressive_ass_subtitle(
                 text=narration_text,
@@ -148,6 +155,8 @@ def render_scene_clip(
                 output_ass_path=ass_path,
                 width=width,
                 height=height,
+                energy_envelope=env,
+                total_duration_sec=padded_duration,
             )
             ass_escaped = (
                 str(ass_path.resolve().as_posix())
@@ -309,8 +318,12 @@ def render_multi_beat_scene_clip(
     ass_filter = ""
     if narration_text and narration_text.strip():
         try:
-            from src.studio_motion_renderer import write_progressive_ass_subtitle
+            from src.studio_motion_renderer import (
+                extract_audio_energy_envelope,
+                write_progressive_ass_subtitle,
+            )
 
+            env = extract_audio_energy_envelope(audio_path, samples_per_sec=30)
             ass_path = output_clip_path.with_suffix(".ass")
             write_progressive_ass_subtitle(
                 text=narration_text,
@@ -318,6 +331,8 @@ def render_multi_beat_scene_clip(
                 output_ass_path=ass_path,
                 width=width,
                 height=height,
+                energy_envelope=env,
+                total_duration_sec=padded_total,
             )
             ass_escaped = (
                 str(ass_path.resolve().as_posix())
@@ -396,6 +411,59 @@ def pick_random_bgm() -> Optional[Path]:
     return chosen
 
 
+def ensure_ambient_bgm(workdir: Path) -> Path:
+    """
+    Tạo tự động 1 vòng nhạc nền ambient hòa âm ấm áp 24 giây không lộ điểm nối (seamless loop)
+    bằng sóng sin hài hòa (A2/E3/A3/C4/E4) + nhịp thở chậm khi thư mục assets/bgm/ chưa có file.
+    """
+    out_path = workdir / "ambient_pad_loop.wav"
+    if out_path.exists() and out_path.stat().st_size > 10_000:
+        return out_path
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    sr = 24000
+    dur = 24.0
+    n_samples = int(sr * dur)
+    t = np.arange(n_samples, dtype=np.float64) / float(sr)
+
+    # Làm tròn tần số về số chu kỳ nguyên trong 24 giây để loop lặp vô hạn không bao giờ nổ lách tách
+    target_freqs = (
+        (110.0, 0.34, 0.0),    # A2 nền trầm ấm
+        (164.81, 0.22, 0.8),   # E3 quãng 5
+        (220.0, 0.24, 1.6),    # A3 âm chủ
+        (261.63, 0.14, 2.4),   # C4 quãng 3 thứ Stoic trầm lắng
+        (329.63, 0.08, 3.1),   # E4 ánh sáng nhẹ trên cao
+    )
+    pad = np.zeros(n_samples, dtype=np.float64)
+    for freq, amp, phase in target_freqs:
+        exact_freq = round(freq * dur) / dur
+        pad += amp * np.sin(2.0 * math.pi * exact_freq * t + phase)
+        # Bổ sung hòa âm bậc 2 rất dịu cho âm sắc đàn/pad ấm (không chói)
+        pad += (amp * 0.18) * np.sin(2.0 * math.pi * (exact_freq * 2.0) * t + phase * 0.5)
+
+    # Bao thở chậm 3 chu kỳ trong 24s (0.125 Hz) + hòa tan 0.15s ở đầu/cuối cho an toàn tuyệt đối
+    breath = 0.72 + 0.28 * np.sin(2.0 * math.pi * (3.0 / dur) * t - math.pi / 2.0)
+    signal = pad * breath
+    peak = float(np.max(np.abs(signal))) or 1.0
+    signal = (signal / peak) * 0.26
+
+    fade_n = int(sr * 0.12)
+    if fade_n > 0 and n_samples > fade_n * 2:
+        ramp = 0.5 * (1.0 - np.cos(math.pi * np.arange(fade_n) / float(fade_n)))
+        signal[:fade_n] *= ramp
+        signal[-fade_n:] *= ramp[::-1]
+
+    pcm = np.clip(signal * 32767.0, -32767.0, 32767.0).astype(np.int16)
+    with wave.open(str(out_path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sr)
+        wf.writeframes(pcm.tobytes())
+
+    logger.info("[BGM SYNTH] Đã tạo nhạc nền ambient không lời mặc định: %s", out_path.name)
+    return out_path
+
+
 def concatenate_and_mix_bgm(
     scene_clips: List[Path],
     output_video_path: Path,
@@ -425,7 +493,7 @@ def concatenate_and_mix_bgm(
     ]
     _run_ffmpeg(concat_cmd, "concat_scenes")
 
-    speed = max(0.75, min(2.0, float(getattr(config, "VIDEO_PLAYBACK_SPEED", 1.25))))
+    speed = max(0.75, min(2.0, float(getattr(config, "VIDEO_PLAYBACK_SPEED", 1.05))))
     apply_speed = abs(speed - 1.0) > 0.01
 
     if bgm_path is None or not bgm_path.exists():
@@ -466,7 +534,7 @@ def concatenate_and_mix_bgm(
         logger.info("[RENDER] Xuất video hoàn chỉnh tốc độ %.2fx: %s", speed, output_video_path.name)
         return output_video_path
 
-    # Trộn nhạc nền lặp vô hạn (-22dB) và áp dụng tốc độ VIDEO_PLAYBACK_SPEED (mặc định 1.25x, giữ cao độ giọng)
+    # Trộn nhạc nền lặp vô hạn (-22dB) và áp dụng tốc độ VIDEO_PLAYBACK_SPEED (mặc định 1.05x điềm tĩnh, giữ cao độ giọng)
     if apply_speed:
         mix_filter = (
             f"[0:v]setpts=PTS/{speed:.4f}[vout];"

@@ -246,9 +246,20 @@ def render_pen_sketch_scene(
 
     sub_tracker = None
     if narration_text and narration_text.strip():
-        from src.studio_motion_renderer import BoxProgressiveSubtitleTracker
+        from src.studio_motion_renderer import (
+            BoxProgressiveSubtitleTracker,
+            extract_audio_energy_envelope,
+        )
 
-        sub_tracker = BoxProgressiveSubtitleTracker(narration_text, width, height)
+        env = extract_audio_energy_envelope(audio_path, samples_per_sec=30)
+        sub_tracker = BoxProgressiveSubtitleTracker(
+            narration_text,
+            width,
+            height,
+            energy_envelope=env,
+            audio_duration_sec=duration_sec,
+            total_duration_sec=padded_duration,
+        )
 
     # Mở tiến trình FFmpeg nhận luồng video raw BGR24 qua stdin và ghép trực tiếp audio TTS
     output_clip_path.parent.mkdir(parents=True, exist_ok=True)

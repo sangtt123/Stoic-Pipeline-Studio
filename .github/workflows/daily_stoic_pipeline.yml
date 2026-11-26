@@ -32,7 +32,7 @@ on:
           - gemini_tts
           - cloud_tts
       character_style:
-        description: 'Nhân vật dẫn chuyện 2D (Cú Mèo / Mèo / Cáo / Shiba / Người que)'
+        description: 'Nhân vật dẫn chuyện 2D (Cú Mèo / Mèo / Cáo / Shiba / Rồng / Robot / Người que)'
         required: false
         default: 'owl_philosopher'
         type: choice
@@ -41,6 +41,8 @@ on:
           - cat_stoic
           - fox_strategist
           - shiba_sensei
+          - dragon_sage
+          - robot_zen
           - stickman
 
 permissions:

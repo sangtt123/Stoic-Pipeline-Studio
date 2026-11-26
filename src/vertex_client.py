@@ -28,6 +28,7 @@ from google.genai import types
 import config
 from src.gcp_auth import load_gcp_service_account
 from src.studio_art_engine import (
+    STUDIO_BACKDROPS,
     STUDIO_COMPOSITIONS,
     STUDIO_EXPRESSIONS,
     STUDIO_OVERLAYS,
@@ -857,6 +858,7 @@ class VertexAIClient:
         language: Optional[str] = None,
         task_name: str = "studio_art_director",
         variation_shift: int = 0,
+        chapter_header: Optional[str] = None,
     ) -> List[StudioShotBlueprint]:
         """
         Chỉ 1 lần gọi LLM JSON nhẹ cho mỗi phân cảnh (thay vì 3–4 lần tạo ảnh raster nặng),
@@ -886,8 +888,9 @@ class VertexAIClient:
         director_prompt = (
             "You are the Lead Visual Storyboard Director for a clean Editorial Explainer YouTube channel.\n"
             f"Direct {len(active_beats)} COMPLETELY DISTINCT visual shots matching each spoken phrase below.\n"
-            "Every consecutive shot MUST use a DIFFERENT composition and a DIFFERENT primary_prop "
-            "so rapid 3-second cuts look dynamic and directly match each clause!\n\n"
+            "Every consecutive shot MUST use a DIFFERENT composition, DIFFERENT primary_prop, and varied stage_backdrop "
+            "so viewers NEVER feel repetitive 'white card' fatigue! Mix bordered diagrams with full-bleed dark hooks, "
+            "high-contrast warning shots, typographic quote spotlights, stat callout cards, timelines, two-character debates, and custom AI-drawn vector scenes.\n\n"
             f"Full Scene Narration: {str(narration or '')[:320]}{regen_note}\n\n"
             "SHOTS TO DIRECT:\n"
             f"{beats_spec}\n\n"
@@ -895,20 +898,35 @@ class VertexAIClient:
             f"- composition: {' | '.join(STUDIO_COMPOSITIONS)}\n"
             f"- character_pose: {' | '.join(STUDIO_POSES)}\n"
             f"- character_expression: {' | '.join(STUDIO_EXPRESSIONS)}\n"
-            f"- secondary_pose (when composition='two_characters_interaction'): {' | '.join(STUDIO_POSES)}\n"
+            f"- secondary_pose (when composition='two_characters_interaction' or 'dialogue_debate'): {' | '.join(STUDIO_POSES)}\n"
             f"- secondary_expression: {' | '.join(STUDIO_EXPRESSIONS)}\n"
             f"- primary_prop: {' | '.join(STUDIO_PROPS)}\n"
             f"- secondary_prop (optional for cause_effect_flow): {' | '.join(STUDIO_PROPS)}\n"
-            f"- overlay_effect: {' | '.join(STUDIO_OVERLAYS)}\n\n"
+            f"- overlay_effect: {' | '.join(STUDIO_OVERLAYS)}\n"
+            f"- stage_backdrop: {' | '.join(STUDIO_BACKDROPS)}\n\n"
+            "SPECIAL EDITORIAL COMPOSITIONS & BESPOKE VECTOR CAPABILITY:\n"
+            '- "full_bleed_hook": Deep ink edge-to-edge dramatic stage (bold opening hooks, big claims, shocking realizations)\n'
+            '- "dark_contrast_insight": Midnight slate contrast panel inside frame (warnings, traps, fear, shadow self, hard truths)\n'
+            '- "quote_spotlight": Large editorial quotation marks + key insight focus with mascot corner accent (proverbs, core lessons)\n'
+            '- "closeup_portrait": Intimate waist-up mascot portrait + expressive prop badge (internal monologue, tough questions)\n'
+            '- "timeline_progression": 3-stage evolution arc (provide 3 crisp points in step_items, <= 24 chars each)\n'
+            '- "stat_callout_card": Big bold metric/number card (provide focal_metric like "80%", "3X", "01", "24H" + step_items subtitle)\n'
+            '- "dialogue_debate": Two mascots debating across opposing speech bubbles (provide left_badge & right_badge)\n'
+            '- "ai_bespoke_scene": One-of-a-kind custom SVG stage you draw inside custom_scene_svg (0..1000 x 0..420) for unique concepts not covered by standard layouts!\n'
+            '- CUSTOM VECTOR PROP ("custom_prop_svg"): Whenever a phrase calls for a unique visual metaphor NOT in the 48 preset props, craft pure geometric SVG tags (<g>,<path>,<circle>,<rect>,<ellipse>,<polygon>,<polyline>,<line>) centered at (0,0) inside [-100..100, -100..100] using ONLY color tokens {{INK}}, {{ACCENT}}, {{SURFACE}}, {{BG}} (NO <text>, NO <script>, NO raw hex). Leave empty if a preset prop fits.\n'
+            '- CUSTOM VECTOR SCENE ("custom_scene_svg"): Used ONLY when composition="ai_bespoke_scene"; craft a clean geometric diagram/illustration in (0,0,1000,420) using ONLY {{INK}}, {{ACCENT}}, {{SURFACE}}, {{BG}} tokens and NO <text>.\n\n'
             "EXACT STORYTELLING EXAMPLES:\n"
-            '- "khi bị chê bai" -> composition="two_characters_interaction", secondary_pose="pointing_accuse", secondary_expression="angry", character_pose="standing_calm", character_expression="calm", primary_prop="criticism_arrows", overlay_effect="none"\n'
-            '- "thay vì đau khổ" -> composition="character_left_prop_right", character_pose="slumped_sad", character_expression="sad", primary_prop="storm_cloud", overlay_effect="big_x_crossout"\n'
-            '- "luồng gió thổi qua hòn đá tảng" -> composition="center_metaphor", primary_prop="boulder_wind", overlay_effect="shield_aura"\n'
-            '- "tâm trí vững vàng của bạn" -> composition="character_on_pedestal", character_pose="shield_stance", character_expression="confident", primary_prop="mind_shield", overlay_effect="checkmark_badge"\n\n'
+            '- "tại sao càng cố làm vừa lòng người khác" -> composition="full_bleed_hook", stage_backdrop="night_stars", character_pose="thinking_chin", character_expression="stressed", primary_prop="mask_duality", overlay_effect="spark_emphasis"\n'
+            '- "cạm bẫy vô hình của nỗi sợ" -> composition="dark_contrast_insight", stage_backdrop="diagonal_rain", character_pose="overwhelmed_head", character_expression="stressed", primary_prop="storm_cloud", overlay_effect="big_x_crossout"\n'
+            '- "90% nỗi lo chưa từng xảy ra" -> composition="stat_callout_card", focal_metric="90%", stage_backdrop="grid_blueprint", character_pose="presenting_idea", character_expression="confident", primary_prop="radar_signal", overlay_effect="spark_emphasis"\n'
+            '- "từ hỗn loạn đến bình an" -> composition="timeline_progression", stage_backdrop="mountain_horizon", character_pose="walking_forward", character_expression="determined", primary_prop="stairs_growth", step_items=["Hoảng loạn", "Quan sát", "Làm chủ"]\n'
+            '- "kẻ mạnh nhất là người làm chủ tâm trí" -> composition="quote_spotlight", stage_backdrop="zen_ripples", character_pose="standing_calm", character_expression="calm", primary_prop="compass", overlay_effect="spark_emphasis"\n'
+            '- "nội tâm giằng xé" -> composition="dialogue_debate", stage_backdrop="library_arch", left_badge="Cảm xúc", right_badge="Lý trí", secondary_pose="pointing_accuse", secondary_expression="angry", character_pose="standing_calm", character_expression="calm", primary_prop="balance_scale"\n\n'
             f'Keep every "caption" crisp (2-5 {"Vietnamese" if is_vietnamese else "English"} words matching the short caption).\n'
             f'Return STRICT JSON: {{"beats": [ {{ "beat_id": 1, "composition": "...", "character_pose": "...", '
             '"character_expression": "...", "secondary_pose": "...", "secondary_expression": "...", '
-            '"primary_prop": "...", "secondary_prop": "...", "overlay_effect": "...", '
+            '"primary_prop": "...", "secondary_prop": "...", "overlay_effect": "...", "stage_backdrop": "...", '
+            '"focal_metric": "", "custom_prop_svg": "", "custom_scene_svg": "", '
             '"caption": "...", "left_badge": "...", "right_badge": "...", "step_items": [] }} ]}} '
             f"with EXACTLY {len(active_beats)} items."
         )
@@ -919,7 +937,8 @@ class VertexAIClient:
                 prompt=director_prompt,
                 system_instruction=(
                     f"You are a precision Visual Storyboard Art Director. Output strictly valid JSON with "
-                    f"EXACTLY {len(active_beats)} diverse, expressive visual shot blueprints using ONLY the allowed enum names."
+                    f"EXACTLY {len(active_beats)} diverse, expressive visual shot blueprints using ONLY the allowed enum names "
+                    f"(plus optional sanitized custom_prop_svg / custom_scene_svg using {{{{INK}}}}/{{{{ACCENT}}}}/{{{{SURFACE}}}}/{{{{BG}}}} tokens)."
                 ),
                 temperature=0.45,
                 task_name=task_name,
@@ -936,6 +955,7 @@ class VertexAIClient:
 
         used_compositions: set[str] = set()
         used_props: set[str] = set()
+        used_backdrops: set[str] = set()
         results: List[StudioShotBlueprint] = []
         total_beats = len(active_beats)
 
@@ -952,20 +972,35 @@ class VertexAIClient:
                 phrase=str(beat.get("phrase") or "").strip(),
                 short_label=short_label,
                 image_prompt=str(beat.get("image_prompt") or "").strip(),
-                chapter_header=None,
+                chapter_header=chapter_header,
                 beat_index=idx,
                 total_beats=total_beats,
                 character_style=char_style,
             )
-            if bp.composition in used_compositions and bp.primary_prop in used_props:
-                alt_comp = next((c for c in STUDIO_COMPOSITIONS if c not in used_compositions), None)
+            if (
+                not (bp.composition == "ai_bespoke_scene" and bp.custom_scene_svg)
+                and bp.composition in used_compositions
+                and bp.primary_prop in used_props
+            ):
+                alt_comp = next(
+                    (c for c in STUDIO_COMPOSITIONS if c != "ai_bespoke_scene" and c not in used_compositions),
+                    None,
+                )
                 if alt_comp:
                     bp.composition = alt_comp
+            if bp.stage_backdrop and bp.stage_backdrop in used_backdrops:
+                alt_backdrop = next((b for b in STUDIO_BACKDROPS if b not in used_backdrops), None)
+                if alt_backdrop:
+                    bp.stage_backdrop = alt_backdrop
             if variation_shift > 0 and idx == 0 and not candidate:
-                bp.composition = STUDIO_COMPOSITIONS[(STUDIO_COMPOSITIONS.index(bp.composition) + variation_shift) % len(STUDIO_COMPOSITIONS)]
+                safe_comps = [c for c in STUDIO_COMPOSITIONS if c != "ai_bespoke_scene"]
+                cur_idx = safe_comps.index(bp.composition) if bp.composition in safe_comps else 0
+                bp.composition = safe_comps[(cur_idx + variation_shift) % len(safe_comps)]
 
             used_compositions.add(bp.composition)
             used_props.add(bp.primary_prop)
+            if bp.stage_backdrop:
+                used_backdrops.add(bp.stage_backdrop)
             results.append(bp)
 
         return results

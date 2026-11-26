@@ -26,6 +26,7 @@ from dotenv import load_dotenv
 import config
 from src.dedup_manager import DedupManager, MatrixCombo
 from src.drive_manager import DriveManager
+from src.studio_motion_renderer import reconcile_visual_beats_to_narration
 from src.vertex_client import VertexAIClient
 
 load_dotenv()
@@ -45,7 +46,7 @@ def _language_label() -> str:
 
 
 def _word_target() -> tuple[int, int]:
-    return config.TARGET_WORD_COUNT.get(config.LANGUAGE, (750, 820))
+    return config.TARGET_WORD_COUNT.get(config.LANGUAGE, (760, 860))
 
 
 def _closing_comment_cta() -> str:
@@ -68,11 +69,11 @@ def _build_writer_system_prompt(history_digest: str) -> str:
         "Tuyệt đối KHÔNG lặp lại tiêu đề, góc tiếp cận, câu chuyện mở đầu hoặc trích dẫn chính "
         "của bất kỳ video nào trong danh sách dưới đây:\n"
         f"{history_digest}\n\n"
-        "YÊU CẦU KỸ THUẬT KỊCH BẢN (CHUẨN VIDEO GIẢI THÍCH BẢNG TRẮNG 5 PHÚT):\n"
-        f"1. Tổng độ dài lời thoại (`narration`) toàn video phải đạt {min_words}–{max_words} từ (~5 phút đọc).\n"
+        "YÊU CẦU KỸ THUẬT KỊCH BẢN (CHUẨN VIDEO KỂ CHUYỆN BẢNG TRẮNG 5 PHÚT — NHỊP 1.05x ĐIỀM TĨNH):\n"
+        f"1. Tổng độ dài lời thoại (`narration`) toàn video phải đạt {min_words}–{max_words} từ (~5 phút đọc điềm tĩnh ở tốc độ 1.05x, mỗi cảnh ~40–55 từ vừa vặn để người xem ngấm ý).\n"
         f"2. Chia thành đúng {config.SCENES_MIN} đến {config.SCENES_MAX} phân cảnh mạch lạc, tự do chọn cấu trúc kể chuyện hấp dẫn nhất cho đề tài (ví dụ: câu chuyện mở màn -> bóc tách cơ chế tâm lý/khoa học -> ví dụ thực tế -> giải pháp ứng dụng; HOẶC phân tích thí nghiệm -> bài học phản trực giác -> lộ trình thực hành; KHÔNG bắt buộc mọi video đều lặp khuôn '4 nguyên lý #1 #2 #3 #4'). Luôn kết thúc bằng 1 cảnh tổng kết đắt giá + câu hỏi mở + lời kêu gọi bình luận.\n"
         "3. Phân cảnh 1–2 (15 giây đầu tiên) phải là một Hook sắc bén, đặt vấn đề trực diện, không chào hỏi sáo rỗng, tránh lặp mô-típ tiêu đề nhàm chán.\n"
-        f"4. CHIA NHIỀU ẢNH DÀY THEO TỪNG CỤM Ý (3–4 ẢNH / CẢNH = ~72–96 ẢNH CHO 5 PHÚT, ~3–4 GIÂY/ẢNH): Mỗi phân cảnh BẮT BUỘC có mảng `visual_beats` gồm ĐÚNG {config.BEATS_PER_SCENE_MIN} đến {config.BEATS_PER_SCENE_MAX} phần tử ứng với từng cụm từ/ý tưởng trong câu thoại `narration` (ví dụ câu 'khi bị chê bai, thay vì đau khổ, hãy coi đó là luồng gió thổi qua hòn đá tảng tâm trí vững vàng' -> tách thành 4 ảnh: 1. Bị chê bai, 2. Đau khổ bị gạch bỏ, 3. Gió thổi qua tảng đá, 4. Tâm trí vững vàng). Mỗi `visual_beats[i].image_prompt` mô tả DUY NHẤT 1 chủ thể/ẩn dụ trực quan tối giản trên nền {config.WHITEBOARD_BG_COLOR}, nét {config.WHITEBOARD_INK_COLOR}, nhấn {config.WHITEBOARD_ACCENT_COLOR}. TUYỆT ĐỐI KHÔNG vẽ chữ/ký tự bên trong tranh, KHÔNG bàn tay chi tiết hay đám đông rối, KHÔNG dùng từ bạo lực/máu me/vũ khí.\n"
+        f"4. CHIA NHIỀU ẢNH DÀY THEO TỪNG CỤM Ý (3–4 ẢNH / CẢNH = ~72–96 ẢNH CHO 5 PHÚT, ~3–4 GIÂY/ẢNH): Mỗi phân cảnh BẮT BUỘC có mảng `visual_beats` gồm ĐÚNG {config.BEATS_PER_SCENE_MIN} đến {config.BEATS_PER_SCENE_MAX} phần tử. BẮT BUỘC: các trường `phrase` trong `visual_beats` PHẢI là các đoạn cắt NGUYÊN VĂN LIÊN TIẾP ghép lại thành đúng 100% câu `narration` của cảnh (KHÔNG được tóm tắt, viết lại hay bỏ sót bất kỳ từ/liên từ/dấu câu nào — ví dụ câu 'Ví dụ, khi bị chê bai, thay vì đau khổ, hãy coi đó là luồng gió thổi qua hòn đá tảng là tâm trí vững vàng.' -> 4 beat: 1) 'Ví dụ, khi bị chê bai,', 2) 'thay vì đau khổ, hãy', 3) 'coi đó là luồng gió thổi qua hòn đá tảng', 4) 'là tâm trí vững vàng.'). Mỗi `visual_beats[i].image_prompt` mô tả DUY NHẤT 1 chủ thể/ẩn dụ trực quan tối giản trên nền {config.WHITEBOARD_BG_COLOR}, nét {config.WHITEBOARD_INK_COLOR}, nhấn {config.WHITEBOARD_ACCENT_COLOR}. TUYỆT ĐỐI KHÔNG vẽ chữ/ký tự bên trong tranh, KHÔNG bàn tay chi tiết hay đám đông rối, KHÔNG dùng từ bạo lực/máu me/vũ khí.\n"
         "5. `quote_overlay`: Từ khóa hoặc câu chốt ngắn tối đa 9 từ (để rỗng `\"\"` ở những cảnh không cần chữ).\n"
         "6. `motion_type`: Chỉ chọn 1 trong 4 giá trị: `zoom_in`, `zoom_out`, `pan_left`, `pan_right` (luân phiên mượt mà).\n"
         f"7. CÂU CHỐT CUỐI VIDEO (BẮT BUỘC): Phân cảnh cuối cùng PHẢI gồm 1 câu tóm tắt đắt giá + 1 câu hỏi gợi mở hành động + kết thúc ĐÚNG bằng câu kêu gọi tương tác: \"{closing_cta}\" (Ví dụ chuẩn: \"Tóm lại, thành công là kết quả của sự lặp lại. Bạn đã sẵn sàng thức dậy vào ngày mai và giành lấy tự do cho chính cuộc đời mình chưa? Hãy bình luận ý kiến của bạn ngay dưới video nhé.\")."
@@ -109,14 +110,14 @@ def _build_writer_user_prompt(
         '  "scenes": [\n'
         "    {\n"
         '      "scene_id": 1,\n'
-        '      "narration": "Lời thoại tự nhiên, trầm tĩnh, giàu nhịp điệu (~45-60 từ)",\n'
+        '      "narration": "Lời thoại tự nhiên, trầm tĩnh, giàu nhịp điệu (~40-55 từ)",\n'
         '      "image_prompt": "English 2D summary visual description (fallback)",\n'
         '      "quote_overlay": "Trích dẫn ngắn <= 10 từ hoặc chuỗi rỗng",\n'
         '      "motion_type": "zoom_in",\n'
-        '      "visual_beats": [\n'
-        '        {"beat_id": 1, "phrase": "Cụm từ 1 trong narration", "caption": "2-4 từ ngắn", "image_prompt": "English clean 2D minimalist visual for phrase 1"},\n'
-        '        {"beat_id": 2, "phrase": "Cụm từ 2 trong narration", "caption": "2-4 từ ngắn", "image_prompt": "English clean 2D minimalist visual for phrase 2"},\n'
-        '        {"beat_id": 3, "phrase": "Cụm từ 3 trong narration", "caption": "2-4 từ ngắn", "image_prompt": "English clean 2D minimalist visual for phrase 3"}\n'
+        "      \"visual_beats\": [\n"
+        '        {"beat_id": 1, "phrase": "Đoạn cắt nguyên văn phần 1 của narration (không bỏ từ)", "caption": "2-4 từ ngắn", "image_prompt": "English clean 2D minimalist visual for phrase 1"},\n'
+        '        {"beat_id": 2, "phrase": "Đoạn cắt nguyên văn phần 2 nối tiếp ngay sau phần 1", "caption": "2-4 từ ngắn", "image_prompt": "English clean 2D minimalist visual for phrase 2"},\n'
+        '        {"beat_id": 3, "phrase": "Đoạn cắt nguyên văn phần 3 đến hết câu narration", "caption": "2-4 từ ngắn", "image_prompt": "English clean 2D minimalist visual for phrase 3"}\n'
         "      ]\n"
         "    }\n"
         "  ]\n"
@@ -267,6 +268,16 @@ def _normalize_script(raw_script: Any, combo: MatrixCombo, video_index: int) -> 
                 prev_phrase = (last_beat.get("phrase") or "").strip()
                 if not re.search(r"(bình luận|comment)", prev_phrase, re.IGNORECASE):
                     last_beat["phrase"] = f"{prev_phrase} {closing_cta}".strip()
+
+    # Đảm bảo 100% phrase của visual_beats nối lại khớp nguyên văn toàn bộ narration
+    for sc in scenes_clean:
+        sc_nar = (sc.get("narration") or "").strip()
+        sc_beats = sc.get("visual_beats") or []
+        if sc_nar and sc_beats:
+            reconciled = reconcile_visual_beats_to_narration(sc_nar, sc_beats)
+            for b_item, synced_phrase in zip(sc_beats, reconciled):
+                if synced_phrase:
+                    b_item["phrase"] = synced_phrase
 
     thumb_prompt = (raw_script.get("thumbnail_prompt") or "").strip()
     if not thumb_prompt and scenes_clean:
