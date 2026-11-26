@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
 
-PIPELINE_BUILD: str = "v3.4"
+PIPELINE_BUILD: str = "v3.5"
 
 # ==============================================================================
 # 1. CẤU HÌNH CÁ NHÂN (Tùy chỉnh trước khi chạy)
@@ -78,8 +78,13 @@ LLM_FALLBACK_MODELS: List[str] = [
 ]
 
 IMAGEN_FALLBACK_MODELS: List[str] = [
+    "gemini-3.1-flash-lite-image",
+    "gemini-nano-banana-2.1",
+    "gemini-3-pro-image",
+    "gemini-2.5-flash-image",
+    "imagen-4.0-generate-001",
     "imagen-4.0-fast-generate-001",
-    "imagen-3.0-fast-generate-002",
+    "imagen-3.0-generate-002",
 ]
 
 # Chuỗi Tạo giọng đọc AI tự nhiên (Gemini Native TTS -> tự động fallback xuống Google Cloud TTS)

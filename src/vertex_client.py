@@ -10,6 +10,7 @@ Cơ chế xử lý lỗi 2 lớp:
 from __future__ import annotations
 
 import base64
+import io
 import json
 import logging
 import random
@@ -139,6 +140,7 @@ class VertexAIClient:
 
         # Bộ nhớ tạm các model trả 404 NOT_FOUND để không gọi lại lãng phí ở các tác vụ sau
         self._unavailable_models: set[str] = set()
+        self._unavailable_reasons: Dict[str, str] = {}
         # Thống kê số lần hạ cấp model để theo dõi vận hành
         self.fallback_events: List[Dict[str, Any]] = []
 
@@ -211,6 +213,7 @@ class VertexAIClient:
                     if _is_daily_quota_or_unavailable(exc):
                         if status_code == 404:
                             self._unavailable_models.add(model_name)
+                            self._unavailable_reasons[model_name] = str(exc)[:220]
                         logger.warning(
                             "[AUTO-FALLBACK] Task='%s' | Model='%s' không khả dụng hoặc hết quota ngày "
                             "(HTTP %s): %s",
@@ -266,6 +269,18 @@ class VertexAIClient:
                     model_name,
                     next_model,
                 )
+
+        if last_error is None:
+            cached = [
+                f"{m}: {self._unavailable_reasons.get(m, '404 NOT_FOUND')}"
+                for m in model_chain
+                if m in self._unavailable_models
+            ]
+            reason_summary = " | ".join(cached) if cached else "Tất cả model đều bị bỏ qua."
+            raise RuntimeError(
+                f"Tất cả model trong chuỗi {model_chain} đều không khả dụng cho task '{task_name}'. "
+                f"Chi tiết: {reason_summary}"
+            )
 
         raise RuntimeError(
             f"Tất cả model trong chuỗi {model_chain} đều thất bại cho task '{task_name}'. "
@@ -459,6 +474,19 @@ class VertexAIClient:
         except ImportError:
             pass
 
+    @staticmethod
+    def _save_image_bytes_as_png(img_bytes: bytes, output_path: Path) -> None:
+        """Lưu dữ liệu ảnh (PNG/JPEG/WebP) từ Gemini Image hoặc Imagen thành file PNG chuẩn."""
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            from PIL import Image
+
+            with Image.open(io.BytesIO(img_bytes)) as pil_img:
+                pil_img.convert("RGB").save(output_path, format="PNG")
+                return
+        except Exception:
+            output_path.write_bytes(img_bytes)
+
     def generate_image(
         self,
         prompt: str,
@@ -468,9 +496,10 @@ class VertexAIClient:
         task_name: str = "imagen_2d",
     ) -> Path:
         """
-        Tạo ảnh 2D tĩnh bằng Vertex AI Imagen (tiết kiệm chi phí, KHÔNG dùng Veo).
-        Tự động nâng cấp prompt chống chữ rác/méo hình, tự viết lại prompt an toàn nếu bị safety filter
-        chặn, và kiểm định file PNG đầu ra (độ phân giải + độ tương phản chống ảnh trống) bằng Pillow.
+        Tạo ảnh 2D tĩnh trên Vertex AI (hỗ trợ song song Gemini Native Image như
+        `gemini-3.1-flash-lite-image`, `gemini-nano-banana-2.1`, `gemini-2.5-flash-image`
+        VÀ dòng `imagen-*`). Tự động nâng cấp prompt chống chữ rác, tự viết lại prompt an toàn
+        nếu bị safety filter chặn, và kiểm định PNG đầu ra bằng Pillow.
         """
         ratio = aspect_ratio or config.ASPECT_RATIO
         chosen_seed = seed if seed is not None else random.randint(1, 2_147_483_646)
@@ -481,7 +510,81 @@ class VertexAIClient:
             "distorted face, ugly anatomy, cluttered busy background, dark muddy shadows, split panel grid"
         )
 
-        def _invoke_imagen(model_name: str, active_prompt: str, active_seed: int):
+        # Luôn đảm bảo có đầy đủ chuỗi Gemini Native Image mới nhất làm ưu tiên / dự phòng
+        default_modern_chain = [
+            "gemini-3.1-flash-lite-image",
+            "gemini-nano-banana-2.1",
+            "gemini-3-pro-image",
+            "gemini-2.5-flash-image",
+            "imagen-4.0-generate-001",
+            "imagen-4.0-fast-generate-001",
+            "imagen-3.0-generate-002",
+        ]
+        effective_chain: List[str] = []
+        for m in list(getattr(config, "IMAGEN_FALLBACK_MODELS", [])) + default_modern_chain:
+            if m and m not in effective_chain:
+                effective_chain.append(m)
+
+        def _invoke_gemini_native_image(model_name: str, active_prompt: str) -> Optional[bytes]:
+            image_cfg_cls = getattr(types, "ImageConfig", None)
+            cfg_variants: List[types.GenerateContentConfig] = []
+            if image_cfg_cls is not None:
+                try:
+                    cfg_variants.append(
+                        types.GenerateContentConfig(
+                            response_modalities=["IMAGE"],
+                            image_config=image_cfg_cls(aspect_ratio=ratio),
+                        )
+                    )
+                except Exception:
+                    pass
+                try:
+                    cfg_variants.append(
+                        types.GenerateContentConfig(
+                            response_modalities=["IMAGE", "TEXT"],
+                            image_config=image_cfg_cls(aspect_ratio=ratio),
+                        )
+                    )
+                except Exception:
+                    pass
+            cfg_variants.append(types.GenerateContentConfig(response_modalities=["IMAGE", "TEXT"]))
+
+            prompt_with_ratio = f"{active_prompt} (Compose cleanly for {ratio} aspect ratio frame.)"
+            last_cfg_err: Optional[Exception] = None
+            response = None
+            for idx_v, gen_cfg in enumerate(cfg_variants):
+                try:
+                    response = self._generate_content_smart(
+                        model_name=model_name,
+                        contents=prompt_with_ratio,
+                        gen_config=gen_cfg,
+                    )
+                    break
+                except Exception as exc:
+                    last_cfg_err = exc
+                    if idx_v + 1 < len(cfg_variants) and _extract_status_code(exc) == 400:
+                        continue
+                    raise
+
+            if response is None:
+                if last_cfg_err:
+                    raise last_cfg_err
+                return None
+
+            for cand in response.candidates or []:
+                if cand.content and cand.content.parts:
+                    for part in cand.content.parts:
+                        if part.inline_data and part.inline_data.data:
+                            raw = part.inline_data.data
+                            if isinstance(raw, str):
+                                raw = base64.b64decode(raw)
+                            elif isinstance(raw, bytearray):
+                                raw = bytes(raw)
+                            if raw and len(raw) >= 2048:
+                                return raw
+            return None
+
+        def _invoke_imagen_api(model_name: str, active_prompt: str, active_seed: int) -> Optional[bytes]:
             base_kwargs: Dict[str, Any] = {
                 "number_of_images": 1,
                 "aspect_ratio": ratio,
@@ -491,66 +594,86 @@ class VertexAIClient:
                 "safety_filter_level": "BLOCK_MEDIUM_AND_ABOVE",
                 "person_generation": "ALLOW_ADULT",
             }
-            try:
-                gen_config = types.GenerateImagesConfig(
-                    **base_kwargs,
-                    negative_prompt=negative_guard,
-                )
-                return self.imagen_client.models.generate_images(
-                    model=model_name,
-                    prompt=active_prompt,
-                    config=gen_config,
-                )
-            except Exception as cfg_err:
-                if "negative_prompt" in str(cfg_err).lower() or "extra_forbidden" in str(cfg_err).lower():
-                    gen_config = types.GenerateImagesConfig(**base_kwargs)
-                    return self.imagen_client.models.generate_images(
-                        model=model_name,
-                        prompt=active_prompt,
-                        config=gen_config,
-                    )
-                raise
+            clients = [self.imagen_client]
+            if self.llm_client is not self.imagen_client:
+                clients.append(self.llm_client)
+
+            last_exc: Optional[Exception] = None
+            for c_idx, client in enumerate(clients):
+                try:
+                    try:
+                        gen_config = types.GenerateImagesConfig(
+                            **base_kwargs,
+                            negative_prompt=negative_guard,
+                        )
+                        result = client.models.generate_images(
+                            model=model_name,
+                            prompt=active_prompt,
+                            config=gen_config,
+                        )
+                    except Exception as cfg_err:
+                        if (
+                            "negative_prompt" in str(cfg_err).lower()
+                            or "extra_forbidden" in str(cfg_err).lower()
+                        ):
+                            gen_config = types.GenerateImagesConfig(**base_kwargs)
+                            result = client.models.generate_images(
+                                model=model_name,
+                                prompt=active_prompt,
+                                config=gen_config,
+                            )
+                        else:
+                            raise
+                    if result.generated_images and result.generated_images[0].image.image_bytes:
+                        return result.generated_images[0].image.image_bytes
+                    return None
+                except Exception as exc:
+                    last_exc = exc
+                    if c_idx + 1 < len(clients) and _extract_status_code(exc) == 404:
+                        continue
+                    raise
+            if last_exc:
+                raise last_exc
+            return None
+
+        def _invoke_any(model_name: str, active_prompt: str, active_seed: int) -> Optional[bytes]:
+            if model_name.startswith("gemini-"):
+                return _invoke_gemini_native_image(model_name, active_prompt)
+            return _invoke_imagen_api(model_name, active_prompt, active_seed)
 
         def _call(model_name: str) -> Path:
-            result = _invoke_imagen(model_name, enhanced_prompt, chosen_seed)
-            if not result.generated_images:
-                # Lần thử 2 tự động làm mềm từ khóa nhạy cảm nếu bộ lọc an toàn chặn ảnh
+            img_bytes = _invoke_any(model_name, enhanced_prompt, chosen_seed)
+            if not img_bytes:
                 softened = self._enhance_imagen_prompt(self._sanitize_safety_prompt(prompt))
                 logger.warning(
-                    "[IMAGEN SAFETY RETRY] Model='%s' trả ảnh rỗng, thử lại với prompt ẩn dụ sạch...",
+                    "[IMAGE SAFETY RETRY] Model='%s' trả ảnh rỗng, thử lại với prompt ẩn dụ sạch...",
                     model_name,
                 )
-                result = _invoke_imagen(model_name, softened, random.randint(1, 2_147_483_646))
+                img_bytes = _invoke_any(model_name, softened, random.randint(1, 2_147_483_646))
 
-            if not result.generated_images:
-                raise RuntimeError(f"Imagen ({model_name}) không trả về ảnh nào cho prompt.")
-
-            img_bytes = result.generated_images[0].image.image_bytes
             if not img_bytes or len(img_bytes) < 2048:
-                raise RuntimeError(f"Imagen ({model_name}) trả về dữ liệu ảnh rỗng hoặc quá nhỏ.")
+                raise RuntimeError(f"Model tạo ảnh ({model_name}) không trả về dữ liệu ảnh hợp lệ.")
 
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_bytes(img_bytes)
+            self._save_image_bytes_as_png(img_bytes, output_path)
 
             try:
                 self._check_image_integrity(output_path)
             except RuntimeError as qa_err:
-                # Nếu ảnh bị trắng trơn / lỗi tương phản -> thử sinh lại 1 lần bằng bố cục ẩn dụ tương phản cao
                 logger.warning(
-                    "[IMAGEN INTEGRITY RETRY] %s -> thử sinh lại với bố cục rõ nét hơn...",
+                    "[IMAGE INTEGRITY RETRY] %s -> thử sinh lại với bố cục rõ nét hơn...",
                     qa_err,
                 )
                 retry_prompt = self._enhance_imagen_prompt(
                     f"Bold high-contrast minimalist icon illustration representing: {self._sanitize_safety_prompt(prompt)}"
                 )
-                retry_res = _invoke_imagen(model_name, retry_prompt, random.randint(1, 2_147_483_646))
-                if not retry_res.generated_images or not retry_res.generated_images[0].image.image_bytes:
+                retry_bytes = _invoke_any(model_name, retry_prompt, random.randint(1, 2_147_483_646))
+                if not retry_bytes or len(retry_bytes) < 2048:
                     raise qa_err
-                output_path.write_bytes(retry_res.generated_images[0].image.image_bytes)
+                self._save_image_bytes_as_png(retry_bytes, output_path)
                 self._check_image_integrity(output_path)
 
             logger.info(
-                "[IMAGEN OK] Model='%s' | Seed=%d | Ratio=%s | Saved=%s",
+                "[IMAGE OK] Model='%s' | Seed=%d | Ratio=%s | Saved=%s",
                 model_name,
                 chosen_seed,
                 ratio,
@@ -560,7 +683,7 @@ class VertexAIClient:
 
         return self._execute_with_fallback(
             task_name=task_name,
-            model_chain=config.IMAGEN_FALLBACK_MODELS,
+            model_chain=effective_chain,
             caller=_call,
         )
 
